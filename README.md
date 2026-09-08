@@ -33,7 +33,7 @@ In active development. See `docs/build-plan.md` for current phase.
 
 TheNag/
 ├── README.md
-├── CONTRIBUTING.md
+├── CONTRIBUTE.md
 ├── docs/
 │   ├── spec.md                          (the full product spec)
 │   ├── team-structure.md                (the team structure doc)
