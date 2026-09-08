@@ -29,3 +29,59 @@ Not a general "organize your saved Reels" tool — there are already several of 
 ## Status
 
 In active development. See `docs/build-plan.md` for current phase.
+
+
+TheNag/
+├── README.md
+├── CONTRIBUTING.md
+├── docs/
+│   ├── spec.md                          (the full product spec)
+│   ├── team-structure.md                (the team structure doc)
+│   └── build-plan.md                    (the 14-day plan)
+│
+├── backend/
+│   ├── extraction/                      (Person 1a + 1b)
+│   │   ├── ocr/                         (Person 1a)
+│   │   │   ├── frame_extraction.py
+│   │   │   ├── ocr_engine.py
+│   │   │   └── tests/
+│   │   ├── audio/                       (Person 1b)
+│   │   │   ├── transcription.py         (Whisper)
+│   │   │   ├── caption_hashtag.py
+│   │   │   └── tests/
+│   │   ├── normalize.py                 (the shared merge step — Step 0 contract lives here)
+│   │   └── contracts/
+│   │       └── extraction_schema.md     (the agreed object shapes from Step 0)
+│   │
+│   ├── classification/                  (Person 2)
+│   │   ├── classifier.py
+│   │   ├── confidence.py
+│   │   ├── date_resolution.py
+│   │   └── tests/
+│   │
+│   ├── actions/                         (Person 3)
+│   │   ├── verification.py              (official-source check)
+│   │   ├── deadline_typing.py
+│   │   ├── category_actions.py          (per-category notes generation)
+│   │   ├── calendar.py
+│   │   ├── milestones.py
+│   │   ├── notifications.py
+│   │   └── tests/
+│   │
+│   └── api/                             (the orchestration layer tying extraction → classification → actions together, and exposing it to frontend)
+│       ├── routes.py
+│       └── models.py
+│
+├── frontend/                            (Person 4)
+│   ├── src/
+│   │   ├── screens/
+│   │   │   ├── ShareIntake/
+│   │   │   ├── ReviewConfirm/
+│   │   │   ├── NotesView/
+│   │   │   └── NotificationSettings/
+│   │   └── components/
+│   └── tests/
+│
+├── .env.example
+├── .gitignore
+└── requirements.txt / package.json      (per your final stack choice)
