@@ -12,6 +12,54 @@ This doc covers exactly how to get the repo, stay up to date, and push your chan
 
 This opens the project in VS Code. You only need to do this once per machine.
 
+### Backend setup (Python)
+
+Each backend subsystem (`extraction/`, `classification/`, `actions/`) has its own `requirements.txt` — see Section 1a below for why. From the specific subsystem folder you're working in:
+```
+python -m venv venv
+```
+Activate it:
+- Windows: `venv\Scripts\activate`
+- Mac/Linux: `source venv/bin/activate`
+
+Then install that subsystem's dependencies:
+```
+pip install -r requirements.txt
+```
+
+Run this activation step every time you open a new terminal to work on that subsystem — it doesn't persist automatically. If you're working across more than one subsystem, repeat this per folder rather than assuming one shared environment covers everything.
+
+### Frontend setup (Vite + React)
+
+From the `frontend/` folder:
+```
+npm install
+npm run dev
+```
+This starts the local dev server — Vite will print the local URL to open in your browser.
+
+---
+
+## 1a. Every module owns its own README and requirements.txt
+
+Each subsystem folder — `backend/extraction/`, `backend/classification/`, `backend/actions/`, and `frontend/` — must have its own `README.md` and, for the Python subsystems, its own `requirements.txt`. This isn't optional documentation, it's how the team stays able to work independently:
+
+- **`requirements.txt` per subsystem** means each person only installs what their own module actually needs (extraction needs Whisper and an OCR library, classification needs an LLM SDK, actions needs a calendar API client — there's no reason for one person's environment to carry another's dependencies), and it means one subsystem's dependency changes never silently break another's setup.
+- **`README.md` per subsystem** should cover, at minimum: what the module does, how to run it on its own, what its inputs and outputs look like (the actual data contract, matching what's in `docs/spec.md` and `docs/team-structure.md`), and any environment variables or API keys it needs.
+
+Whoever creates a new subsystem folder is responsible for adding both files at the same time — not after the fact once code already exists. If you add a new dependency to your subsystem, update that subsystem's `requirements.txt` in the same commit, not a later one.
+
+---
+
+## Per-folder README and requirements.txt (required for every subsystem folder)
+
+Every subsystem folder — `backend/extraction/`, `backend/classification/`, `backend/actions/`, `frontend/`, and any subfolder that's its own working unit — must have its own:
+
+- **`README.md`** — a short doc covering: what this subsystem does, how to run it on its own, what its inputs/outputs look like (the data contract it exposes to other subsystems), and any setup steps specific to it beyond the top-level repo setup.
+- **`requirements.txt`** — for Python folders, listing only the dependencies that specific subsystem actually needs, not a copy of every package used anywhere in the backend. This keeps each subsystem installable and testable in isolation, and makes it obvious at a glance what a given piece of code actually depends on.
+
+Whoever creates a new subsystem folder is responsible for adding both files before the first real code goes in, not after. If you're extending an existing subsystem, keep its README's inputs/outputs section current — it's the fastest way for a teammate to understand a data contract without reading your code.
+
 ---
 
 ## 2. Before you start working — update to the latest code
@@ -118,6 +166,8 @@ Once this is on, GitHub will reject any push directly to `main` from anyone — 
 | I want to... | Command |
 |---|---|
 | Get the repo for the first time | `git clone <url>` |
+| Set up backend (Python, per subsystem) | From the subsystem folder (e.g. `backend/extraction/`): `python -m venv venv`, activate it, `pip install -r requirements.txt` |
+| Set up frontend (Vite + React) | From `frontend/`: `npm install`, then `npm run dev` |
 | Update my local `main` | `git checkout main` then `git pull origin main` |
 | Start new work | `git checkout -b your-name/short-description` |
 | Save my changes locally | `git add .` then `git commit -m "message"` |
