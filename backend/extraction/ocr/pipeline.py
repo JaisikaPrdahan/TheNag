@@ -168,8 +168,12 @@ if __name__ == "__main__":
     if is_url(input_arg):
         print(f"Downloading media from URL: {input_arg}")
         try:
-            media_path, media_type = download_media_from_url(input_arg)
+            download_result = download_media_from_url(input_arg)
+            media_path = download_result["path"]
+            media_type = download_result["media_type"]
             print(f"Downloaded {media_type} to: {media_path}")
+            print(f"Caption: {download_result['caption_text']}")
+            print(f"Hashtags: {download_result['hashtags']}")
         except AutoFetchFailed as e:
             # This is the graceful-fallback case: auto-fetch didn't work,
             # for whatever reason. In the real app, this is exactly where
