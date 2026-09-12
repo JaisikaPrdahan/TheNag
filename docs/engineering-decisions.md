@@ -57,3 +57,43 @@ This tracks technical decisions made during actual implementation and testing �
 **What this means practically:** video Reel URLs work reliably. Photo post URLs work *sometimes* — when auto-fetch fails, the code raises a specific `AutoFetchFailed` exception with a clear message, and the real app should catch this and prompt the user to upload the file manually instead. Manual upload always works regardless of what Instagram does, and is the reliable fallback for every input type.
 
 **Known unsupported case:** multi-image carousels — not handled at all yet. A user sharing a carousel should be told to share one image from it directly, or upload manually.
+
+---
+
+## Video download format: explicit video+audio merge, not a single combined selector — locked
+
+**Decision:** `yt-dlp`'s format selector is `"bestvideo+bestaudio/best"` with `"merge_output_format": "mp4"`, not the simpler `"mp4/best"`.
+
+**Why:** confirmed via a real bug — a YouTube Shorts test download succeeded with a plain `"mp4/best"` selector, but the resulting file had a video stream and **no audio stream at all** (confirmed with `ffprobe`), because that platform serves video and audio as separate streams and no single combined mp4 format existed. This failed silently until Whisper tried to read it. Forcing an explicit video+audio merge via FFmpeg fixes this for any platform that splits streams, not just YouTube — worth keeping even though Instagram reels (the actual target) seem to bundle streams together already, since it's a low-cost safeguard against the same failure on other platforms.
+
+---
+
+## Whisper model size: "medium", not "small" — locked
+
+**Decision:** default Whisper model is `"medium"`, not the originally-planned `"small"`.
+
+**Why:** confirmed via real testing, not assumption. On real reel audio with background music, `"small"` produced fluent-sounding but hallucinated garbage (random mixed Chinese/German-looking fragments with no relation to the actual content). The exact same audio, run through `"medium"`, produced a structurally coherent, grammatically correct transcript. This is a decisive difference, not a marginal one — `"small"` is not considered usable for this content type.
+
+**Still unverified:** whether `"medium"`'s output is actually *correct* content-wise (a native speaker needs to confirm), only that it's structurally coherent where `"small"` wasn't. `"medium"` is also a much larger download (~1.4GB) and slower to run — worth knowing if this becomes a real constraint later.
+
+**Also confirmed:** music/song content reliably produces empty transcripts regardless of model size — Whisper is built for speech, not sung vocals. Expected behavior, not a bug, and unlikely to matter for TheNag's actual target content.
+
+---
+
+## Caption and hashtag extraction: only available for URL input, not local files — locked
+
+**Decision:** `caption_text` and `hashtags` are populated from the source post's metadata (`yt-dlp`'s `description` field for videos, `instaloader`'s `Post.caption` for photos) only when the input is an Instagram URL. Local-file input always returns `None`/`[]` for these fields.
+
+**Why:** there's no metadata to extract from a bare video/image file sitting on disk — captions and hashtags only exist as properties of the actual Instagram post, which is only visible when fetching by URL.
+
+**Confirmed working via real test:** a real Instagram Reel URL correctly returned its full caption (including the actual stated deadline, "20th October") and correctly parsed hashtags (`['india', 'govtinternship', 'career', 'job', 'internship']`). Caption text is often the cleanest, most directly usable source of deadline information — frequently clearer than what OCR or the audio transcript produce from the same reel — and should be weighted accordingly once Person 2's classifier is built.
+
+---
+
+## Combined extraction pipeline (OCR + Whisper + caption/hashtags): confirmed working end-to-end — locked
+
+**Decision:** `backend/extraction/combine.py` is the single entry point Person 2 should call — it downloads (if given a URL), runs OCR, runs Whisper (video only), and returns one unified object per `backend/extraction/contracts/extraction_output.md`.
+
+**Confirmed via real test:** a real Instagram Reel URL produced correct caption text, correct hashtags, 22 OCR segments (mixed confidence, as expected — this varies reel to reel), and a coherent English transcript, all in one call, on real content.
+
+**One real gap surfaced by this integration, not present in either subsystem alone:** `combine.py` requires *both* OCR's and audio's dependencies simultaneously (Tesseract, OpenCV, Whisper, yt-dlp, instaloader, etc.), so it needs its own dedicated venv and `requirements.txt` at `backend/extraction/` — it cannot simply reuse either subsystem's own venv, since neither has both sets of packages installed.
