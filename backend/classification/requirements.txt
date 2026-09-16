@@ -1,0 +1,9 @@
+# classify_extraction()/date_resolver.py themselves are pure stdlib
+# (re, datetime, dataclasses) -- no NLP/LLM library is in use yet,
+# despite docs/team-structure.md suggesting "an LLM API for
+# classification/reasoning" as the stack. Current approach is
+# rule-based keyword matching (see keywords.py). Revisit this file if
+# that changes.
+
+psycopg2-binary>=2.9      # backend/db/client.py -- creating the opportunities row, updating reels/stage_events
+pytest>=8.3               # running tests/
