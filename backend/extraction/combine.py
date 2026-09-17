@@ -5,11 +5,15 @@ subsystems, which until now only existed as separate, independently
 testable pipelines. This is what Person 2 (Classification) should
 actually call.
 
-Caption text and hashtags (per docs/spec.md Section 1/2) are pulled
-from the source post when a URL is given — see url_downloader.py.
-Local file input has no post metadata to pull from, so caption_text
-and hashtags are always empty in that case (there's no post to read a
-caption off of, just a bare media file).
+Caption text, hashtags, and post_date (per docs/spec.md Section 1/2)
+are pulled from the source post when a URL is given — see
+url_downloader.py. Local file input has no post metadata to pull from,
+so caption_text, hashtags, and post_date are always empty/None in that
+case (there's no post to read a caption or publish date off of, just a
+bare media file). post_date matters specifically because Person 2's
+relative-date resolution ("next Friday", "in 2 weeks") must be
+calculated against the reel's own publish date, not whenever
+classification happens to run.
 """
 
 import os
@@ -41,11 +45,13 @@ def run_extraction(media_path_or_url, temp_frame_dir="./_temp_frames", languages
         media_type = download_result["media_type"]
         caption_text = download_result["caption_text"]
         hashtags = download_result["hashtags"]
+        post_date = download_result["post_date"]
     else:
         media_path = media_path_or_url
         media_type = "image" if media_path.lower().endswith((".jpg", ".jpeg", ".png")) else "video"
         caption_text = None  # no post to read a caption from — this is a bare local file
         hashtags = []
+        post_date = None      # no post to read a publish date from either
 
     ocr_results = run_ocr_pipeline(
         media_path,
@@ -66,6 +72,7 @@ def run_extraction(media_path_or_url, temp_frame_dir="./_temp_frames", languages
         "media_type": media_type,
         "caption_text": caption_text,
         "hashtags": hashtags,
+        "post_date": post_date,
         "ocr_results": ocr_results,
         "transcript": transcript,
         "source_languages": list(source_languages),
@@ -93,6 +100,7 @@ if __name__ == "__main__":
     print(f"\nMedia type: {result['media_type']}")
     print(f"Caption text: {result['caption_text']}")
     print(f"Hashtags: {result['hashtags']}")
+    print(f"Post date: {result['post_date']}")
 
     print(f"\nOCR results ({len(result['ocr_results'])} segments):")
     for r in result["ocr_results"]:
