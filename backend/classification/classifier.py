@@ -1,5 +1,5 @@
 from models import ClassifiedFacts, ExtractedFact
-from date_resolver import resolve_dates
+from date_resolver import resolve_dates, parse_post_date
 from confidence import category_confidence, needs_clarification
 from keywords import CATEGORIES
 
@@ -168,7 +168,17 @@ def classify_extraction(extraction):
             )
         )
 
-    resolved_dates = resolve_dates(extraction)
+    # FIX: relative dates ("next Friday", "in 2 weeks") must resolve
+    # against the reel's own publish date, not whenever classification
+    # happens to run -- resolve_dates() previously always received
+    # reference_date=None here, silently defaulting to datetime.now()
+    # inside date_resolver.py. A reel classified days after posting
+    # would then compute the wrong date entirely. post_date comes from
+    # combine.py's extraction output (see extraction_output.md) --
+    # None only for local-file input, which has no post metadata to
+    # read a publish date from in the first place.
+    reference_date = parse_post_date(extraction.get("post_date"))
+    resolved_dates = resolve_dates(extraction, reference_date=reference_date)
 
     return ClassifiedFacts(
         primary_category=best_category,

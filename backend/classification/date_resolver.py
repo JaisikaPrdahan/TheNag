@@ -4,6 +4,29 @@ from datetime import datetime, timedelta
 from confidence import source_confidence as _source_confidence
 
 
+def parse_post_date(post_date_value):
+    """
+    Parses extraction["post_date"] (an ISO 8601 string from
+    combine.py, or None for local-file input) into the datetime that
+    relative-date resolution should use as its reference point.
+
+    Falls back to the current time only when post_date_value is
+    missing or unparseable -- this used to be resolve_dates()'s only
+    behavior (a real bug: relative dates like "next Friday" would
+    resolve against whenever classification happened to run, not the
+    reel's own publish date, silently drifting wrong the longer a reel
+    sat in a queue before processing). Now it's strictly a last-resort
+    fallback, not the normal case.
+    """
+    if not post_date_value:
+        return datetime.now()
+
+    try:
+        return datetime.fromisoformat(post_date_value)
+    except (TypeError, ValueError):
+        return datetime.now()
+
+
 MONTHS = {
     "january": 1, "jan": 1,
     "february": 2, "feb": 2,
@@ -312,6 +335,13 @@ def resolve_dates(extraction, reference_date=None):
 
     Takes Person 1's extraction output and returns a list of
     structured date objects for ClassifiedFacts.resolved_dates.
+
+    reference_date should normally be parse_post_date(extraction.get(
+    "post_date")) -- the caller (classifier.py) is responsible for
+    passing it, since that's where extraction is first unpacked.
+    Defaulting to None here (which falls through to datetime.now()
+    below) exists only as a safety net for direct/test callers, not
+    as the intended normal path.
     """
 
     if reference_date is None:

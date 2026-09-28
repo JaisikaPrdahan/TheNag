@@ -32,11 +32,14 @@ get rate-limited or blocked. When auto-fetch fails, callers should catch
 AutoFetchFailed and fall back to asking the user to upload the file
 manually — that path always works regardless of what Instagram does.
 
-Also extracts caption text and hashtags from the post where available
-(yt-dlp's info dict for video posts, instaloader's Post object for
-photo posts) — this feeds Person 2's classification per docs/spec.md
-Section 1/2, where hashtags in particular are a strong, fast
-classification signal.
+Also extracts caption text, hashtags, and the post's original publish
+date from the post where available (yt-dlp's info dict for video
+posts, instaloader's Post object for photo posts) — caption/hashtags
+feed Person 2's classification per docs/spec.md Section 1/2, and the
+post date is what relative-date resolution ("next Friday", "in 2
+weeks") must be calculated against, not whenever classification
+happens to run — a reel processed days after posting would otherwise
+resolve "next Friday" to the wrong date entirely.
 """
 
 import os
@@ -87,6 +90,7 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
             "media_type": "video" | "image",
             "caption_text": str or None,
             "hashtags": [str, ...],
+            "post_date": str or None,   # ISO 8601, the post's own publish date
         }
 
     Tries yt-dlp first (works for Reels and other video posts). If
@@ -99,12 +103,13 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
     unique_id = uuid.uuid4().hex
 
     try:
-        path, caption_text = _download_video(url, output_dir, unique_id)
+        path, caption_text, post_date = _download_video(url, output_dir, unique_id)
         return {
             "path": path,
             "media_type": "video",
             "caption_text": caption_text,
             "hashtags": extract_hashtags(caption_text),
+            "post_date": post_date,
         }
     except _NoVideoInPost:
         pass  # fall through to the photo-post path below
@@ -115,12 +120,13 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
         ) from e
 
     try:
-        path, caption_text = _download_via_instaloader(url, output_dir, unique_id)
+        path, caption_text, post_date = _download_via_instaloader(url, output_dir, unique_id)
         return {
             "path": path,
             "media_type": "image",
             "caption_text": caption_text,
             "hashtags": extract_hashtags(caption_text),
+            "post_date": post_date,
         }
     except Exception as e:
         raise AutoFetchFailed(
@@ -177,7 +183,15 @@ def _download_video(url, output_dir, unique_id):
     # including Instagram. Not guaranteed to always be present.
     caption_text = result_info.get("description")
 
-    return downloaded_path, caption_text
+    # yt-dlp's "upload_date" is a "YYYYMMDD" string (date only, no
+    # time), or absent entirely. Normalize to ISO 8601 so both download
+    # paths return the same format for callers to parse.
+    post_date = None
+    raw_upload_date = result_info.get("upload_date")
+    if raw_upload_date and len(raw_upload_date) == 8:
+        post_date = f"{raw_upload_date[0:4]}-{raw_upload_date[4:6]}-{raw_upload_date[6:8]}"
+
+    return downloaded_path, caption_text, post_date
 
 
 def _extract_shortcode(url):
@@ -227,4 +241,8 @@ def _download_via_instaloader(url, output_dir, unique_id):
     # instaloader's Post.caption is the actual post caption text.
     caption_text = post.caption
 
-    return image_path, caption_text
+    # Post.date_utc is a real datetime object (UTC) — already has
+    # both date and time, unlike yt-dlp's date-only string.
+    post_date = post.date_utc.isoformat() if post.date_utc else None
+
+    return image_path, caption_text, post_date
