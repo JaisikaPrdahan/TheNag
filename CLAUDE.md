@@ -19,7 +19,7 @@ The backend is a staged pipeline. Each stage is owned by a different team member
 ### Contract rules that are easy to get wrong
 
 - `caption_text`, `hashtags`, and `post_date` only exist for URL input; for local files they are `None`/`[]`.
-- **Relative dates must resolve against the reel's `post_date`**, not the current time. Pass it through `date_resolver.parse_post_date()`; `resolve_dates()` silently falls back to "now" otherwise (this was a real bug). Relative dates stay tagged yellow even after resolution.
+- **Relative dates must resolve against the reel's `post_date`**, not the current time. `classify_extraction()` already does this (`reference_date = parse_post_date(extraction.get("post_date"))`); any other caller of `resolve_dates()` must pass `reference_date` the same way, or it silently falls back to "now" (this was a real bug — regression test in `classification/tests/test_post_date_regression.py`). `parse_post_date()` itself falls back to "now" only when `post_date` is missing or unparseable (local-file input). Relative dates stay tagged yellow even after resolution.
 - `ocr_results` never contains red-confidence entries (dropped in the OCR pipeline). Transcripts have no confidence score and may be empty (music) or contain hallucinations — don't treat them as green.
 - Whisper model size is locked to `"medium"`; Tesseract (not Cloud Vision) is locked. Check `docs/engineering-decisions.md` before changing any "locked" decision.
 - Classifier category labels (`"Hackathon/Competition"`) differ from DB values (`hackathon_competition`); the mapping is `CATEGORY_TO_DB_VALUE` in `classification/db_writes.py`. A new category must be added there and to the check constraint in `backend/db/migrations/003_opportunities.sql`.
@@ -65,8 +65,8 @@ python combine.py "https://www.instagram.com/reel/SOME_ID/"
 cd backend/classification && pytest tests/ -v
 pytest tests/test_date_resolver.py -v
 pytest tests/test_date_resolver.py::test_explicit_date_from_caption_is_green
-cd backend/extraction/ocr && pytest tests/ -v
-cd backend/extraction/audio && pytest tests/ -v
+cd backend/extraction/ocr && pytest tests/ -v     # the combined backend/extraction/venv
+cd backend/extraction/audio && pytest tests/ -v   # runs both OCR and audio suites
 ```
 
 No linter or formatter is configured.
