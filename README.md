@@ -19,7 +19,6 @@ Not a general "organize your saved Reels" tool — there are already several of 
 
 - [`docs/spec.md`](docs/spec.md) — the full product spec
 - [`docs/team-structure.md`](docs/team-structure.md) — team roles, ownership, and interfaces
-- [`docs/build-plan.md`](docs/build-plan.md) — the day-by-day build plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to clone, branch, commit, and open a PR
 
 ## Team
@@ -28,7 +27,7 @@ Not a general "organize your saved Reels" tool — there are already several of 
 
 ## Status
 
-In active development. See `docs/build-plan.md` for current phase.
+In active development.
 
 
 TheNag/
@@ -36,8 +35,7 @@ TheNag/
 ├── CONTRIBUTE.md
 ├── docs/
 │   ├── spec.md                          (the full product spec)
-│   ├── team-structure.md                (the team structure doc)
-│   └── build-plan.md                    (the 14-day plan)
+│   └── team-structure.md                (the team structure doc)
 │
 ├── backend/
 │   ├── extraction/                      (Person 1a + 1b)
@@ -68,9 +66,12 @@ TheNag/
 │   │   ├── notifications.py
 │   │   └── tests/
 │   │
-│   └── api/                             (the orchestration layer tying extraction → classification → actions together, and exposing it to frontend)
-│       ├── routes.py
-│       └── models.py
+│   ├── api/                             (the orchestration layer tying extraction → classification → actions together, and exposing it to frontend)
+│   │   ├── routes.py
+│   │   └── models.py
+│   │
+│   ├── docker-compose.yml               (local Postgres — run `docker compose up -d` from backend/)
+│   └── .env.example
 │
 ├── frontend/                            (Person 4)
 │   ├── src/
@@ -82,6 +83,5 @@ TheNag/
 │   │   └── components/
 │   └── tests/
 │
-├── .env.example
 ├── .gitignore
 └── requirements.txt / package.json      (per your final stack choice)

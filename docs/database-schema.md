@@ -19,7 +19,7 @@ If two of you are ever confused about who's supposed to update a field, check th
 
 ## Docker setup
 
-Add this `docker-compose.yml` to the repo root:
+`docker-compose.yml` lives in `backend/`:
 
 ```yaml
 services:
@@ -34,13 +34,15 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./backend/db/migrations:/docker-entrypoint-initdb.d
+      - ./db/migrations:/docker-entrypoint-initdb.d
 
 volumes:
   pgdata:
 ```
 
-The `./backend/db/migrations:/docker-entrypoint-initdb.d` line means any `.sql` file in `backend/db/migrations/` runs automatically the first time the container starts — that's where the table definitions below go.
+The `./db/migrations:/docker-entrypoint-initdb.d` line (relative to `backend/`) means any `.sql` file in `backend/db/migrations/` runs automatically the first time the container starts — that's where the table definitions below go.
+
+Run all of the commands below from `backend/`.
 
 **To start the database:**
 ```
@@ -64,7 +66,7 @@ Each teammate needs Docker Desktop installed and running locally. The database c
 ```
 postgresql://thenag:thenag_dev@localhost:5432/thenag
 ```
-This goes in `.env` as `DATABASE_URL` — already gitignored.
+This goes in `backend/.env` as `DATABASE_URL` (copy it from `backend/.env.example`) — already gitignored.
 
 ---
 
@@ -192,7 +194,8 @@ backend/
       003_opportunities.sql
       004_notification_preferences.sql
     README.md
-docker-compose.yml      (repo root)
+  docker-compose.yml
+  .env.example
 ```
 
 Since all three backend subsystems read/write to the same database, put the shared connection setup in `backend/db/client.py` rather than duplicating it in `extraction/`, `classification/`, and `actions/` separately. A basic version using `psycopg2` or `SQLAlchemy`:

@@ -13,13 +13,13 @@ tables to actually exist.
   reading `DATABASE_URL` from the environment.
 - `migrations/*.sql` — one file per table (`reels`, `stage_events`,
   `opportunities`, `notification_preferences`), run automatically by
-  Postgres on first container start (see the repo-root
-  `docker-compose.yml`, which mounts this folder at
+  Postgres on first container start (see
+  `backend/docker-compose.yml`, which mounts this folder at
   `/docker-entrypoint-initdb.d`).
 
 ## Running the database locally
 
-From the repo root:
+From `backend/`:
 
 ```
 docker compose up -d
@@ -38,7 +38,7 @@ docker compose up -d
 
 ## Environment
 
-Copy `.env.example` (repo root) to `.env` and make sure your process
+Copy `backend/.env.example` to `backend/.env` and make sure your process
 loads it (e.g. `python-dotenv`, or your framework's own env loading).
 `DATABASE_URL` for local dev is:
 
