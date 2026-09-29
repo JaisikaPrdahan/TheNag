@@ -12,8 +12,8 @@ The backend is a staged pipeline. Each stage is owned by a different team member
 
 1. **Extraction** (`backend/extraction/`, Person 1) — `combine.py::run_extraction(path_or_url)` is the single integration point; callers should use it, not the `ocr/` or `audio/` subsystems directly. It downloads URL input (`ocr/url_downloader.py`, yt-dlp / instaloader), runs Tesseract OCR (`ocr/pipeline.py`), and runs Whisper (`audio/transcription.py`, video only). Output shape is **locked** in `backend/extraction/contracts/extraction_output.md`.
 2. **Classification** (`backend/classification/`, Person 2) — `classifier.py::classify_extraction(extraction)` returns `models.ClassifiedFacts`. Keyword scoring from `keywords.py` (weights: hashtags 3, caption 2, OCR 2, transcript 1), confidence tiers in `confidence.py`, date parsing in `date_resolver.py`. `db_writes.py::classify_and_persist()` wraps it with DB persistence.
-3. **Actions** (`backend/actions/`, Person 3) — verification, calendar event, notes, notifications. Not yet implemented.
-4. **API** (`backend/api/`) — orchestration layer exposing the pipeline to the frontend. Not yet implemented.
+3. **Actions** (`backend/actions/`, Person 3) — `providers.py` has `CalendarProvider`/`NotesProvider` (mock, Google Calendar, Notion — see `backend/actions/README.md`); `engine.py::accept_opportunity()` is the integration point, called from `backend/api/app.py`'s `record_action()`.
+4. **API** (`backend/api/app.py`) — in-memory orchestration layer (seeded from `backend/demo/seed.json`, not the Postgres schema below) exposing `heuristic_extract`/`rank_and_explain` (`backend/pipeline/`) and, for link input, `run_extraction`/`classify_extraction` from stages 1–2. Endpoints: `process-caption`, `process-upload`, `process-link`, `opportunities/{id}/action`, `bootstrap`, `reflect`. `process-link`'s real path needs stage 1's extraction dependencies (Tesseract/FFmpeg/Whisper/yt-dlp/instaloader) installed per `backend/api/requirements.txt`; it's lazily imported so the API and its tests work without them.
 5. **Frontend** (`frontend/`, Vite + React) — planned, not yet in the repo.
 
 ### Contract rules that are easy to get wrong
@@ -30,7 +30,9 @@ Shared Postgres (`backend/db/`): `client.py::get_connection()` (psycopg2, `RealD
 
 ### Imports / module layout
 
-There are no packages or `__init__.py` files. Modules import siblings by bare name and cross-folder access is done via `sys.path.insert` (e.g. `combine.py` adds `ocr/` and `audio/`; `db_writes.py` adds `backend/` to reach `db.client`; tests add their parent folder). Follow the same pattern and run scripts/tests from inside the relevant subsystem folder.
+This applies to stages 1–2 (`extraction/`, `classification/`): no packages or `__init__.py` files there. Modules import siblings by bare name and cross-folder access is done via `sys.path.insert` (e.g. `combine.py` adds `ocr/` and `audio/`; `db_writes.py` adds `backend/` to reach `db.client`; tests add their parent folder). Follow the same pattern and run scripts/tests from inside the relevant subsystem folder. `backend/api/`, `backend/pipeline/`, `backend/memory/`, and `backend/actions/` are proper packages with `__init__.py` instead.
+
+**Gotcha:** `backend/extraction/ocr/pipeline.py` bare-imports itself as `pipeline`, the same bare name `backend/pipeline` (the API's own package) holds in `sys.modules`. Anything that imports `combine.py` into the same process as `backend/pipeline` must stash/restore `sys.modules["pipeline"]` around that import (see `app.py::_load_extraction_combine()`) or one of the two silently shadows the other.
 
 ## Environment setup
 

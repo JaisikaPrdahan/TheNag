@@ -112,3 +112,15 @@ This tracks technical decisions made during actual implementation and testing �
 - `date_resolver.py` gained `parse_post_date()`, and `classifier.py` now calls it and passes the result as `resolve_dates()`'s `reference_date`, instead of relying on the old (buggy) default.
 
 **Covered by a regression test** (`tests/test_post_date_regression.py`) that posts a caption saying "next Friday" with a `post_date` set 10 days in the past, and asserts the resolved date is calculated relative to that post date, not today — this is exactly the scenario that was silently wrong before.
+
+---
+
+## `/api/process-link` integration choices — not locked
+
+**Bare-name collision:** `backend/extraction/ocr/pipeline.py` bare-imports itself as `pipeline` (per the repo's flat sys.path.insert convention), which collides with `backend/pipeline`, the API's own proper package, also occupying the bare name `pipeline` in `sys.modules`. `app.py::_load_extraction_combine()` pops `sys.modules["pipeline"]` before `import combine` and restores it afterward, so extraction's `pipeline` resolves correctly without permanently clobbering the API's `pipeline` package. Revisit if either module is ever renamed — the workaround becomes dead code, not a latent bug, if so.
+
+**Deferred (lazy) import of `combine.py`:** `run_extraction` is only actually imported on the first real `/api/process-link` request, not at module load. This lets the API start and its test suite run without extraction's heavy dependencies (Tesseract, FFmpeg, PyTorch/Whisper, yt-dlp, instaloader) installed — those are listed in `backend/api/requirements.txt` but were not installed or exercised end-to-end in this session; tests monkeypatch `app.run_extraction` / `app.classify_extraction` instead.
+
+**`deadline_confidence` defaults to yellow:** `actions/engine.py::accept_opportunity()` only creates a calendar event when `deadline_confidence == "green"`. Link-ingested opportunities get this from the classifier; caption/upload-path opportunities (heuristic-only, no classifier involved) have no such field and so default to yellow — note-only on accept, never an unconfirmed date landing on the calendar. Revisit if caption/upload input should also get classifier-backed date confidence.
+
+**Google auth is refresh-token-only:** no in-app OAuth consent flow; a refresh token is generated once via the OAuth Playground and passed through `GOOGLE_REFRESH_TOKEN`. Matches the rest of the repo's provider style (raw `urllib`, no SDK — see `backend/memory/providers.py`, `backend/pipeline/providers.py`) but means token issuance is a manual, external step, not something the app does for the user.

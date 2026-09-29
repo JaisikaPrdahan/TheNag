@@ -105,6 +105,11 @@ docker compose up -d
 | `HINDSIGHT_BANK_PREFIX` | Optional | Per-user Hindsight bank prefix |
 | `ENABLE_LOCAL_WHISPER` | Optional | Set `true` to transcribe uploaded videos through the existing Whisper adapter |
 | `CORS_ORIGINS` | Optional | Comma-separated frontend origins |
+| `GOOGLE_CLIENT_ID` | Optional | Enables real Google Calendar events on accept |
+| `GOOGLE_CLIENT_SECRET` | Optional | Paired with `GOOGLE_CLIENT_ID` |
+| `GOOGLE_REFRESH_TOKEN` | Optional | Long-lived refresh token; get one via the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground) using your own client ID/secret (gear icon → "Use your own OAuth credentials") and the `https://www.googleapis.com/auth/calendar` scope |
+| `NOTION_API_KEY` | Optional | Enables real Notion notes/pages on accept |
+| `NOTION_DATABASE_ID` | Optional | Target Notion database, shared with the integration that owns `NOTION_API_KEY` |
 
 ## Integration status
 
@@ -114,6 +119,8 @@ docker compose up -d
 | Video transcription | Clearly labelled caption/demo fallback | Existing Whisper adapter when `ENABLE_LOCAL_WHISPER=true` |
 | User memory | Seeded in-process provider | Hindsight Cloud adapter |
 | Application data | Seeded in-process records | PostgreSQL schema and migration included |
+| Link ingestion | `POST /api/process-link` runs the real extraction → classification pipeline; needs Tesseract/FFmpeg and `backend/api/requirements.txt`'s extraction deps installed | Same code path; no separate configured mode |
+| Accept actions | In-memory mock calendar event + note | Google Calendar event + Notion page when both provider credentials above are set |
 
 The provider boundaries are implemented and demo fallback is tested. Live Groq, Hindsight Cloud, and Whisper credentials were not supplied here, so those hosted paths are not claimed as live-verified.
 
@@ -129,7 +136,7 @@ TheNag is free for individual job seekers. Revenue comes from verified-opportuni
 
 - Demo-mode persistence resets when the API process restarts; production PostgreSQL persistence is represented by the migration and API boundary.
 - Hosted Hindsight and Groq calls need valid environment credentials before use.
-- Instagram share-sheet integration and direct Reel-link ingestion are roadmap items; the demo intentionally uses upload and caption paste only.
+- Instagram share-sheet integration is a roadmap item; direct Reel-link ingestion (`POST /api/process-link`) is implemented, alongside upload and caption paste.
 - Scholarships, exams, the remaining nine languages, and full official-source verification are roadmap items.
 - The supplied source scores are fictional demonstration data, not real-world reliability claims.
 
