@@ -8,12 +8,15 @@ see the audio README for setup instructions.
 """
 
 import json
+import logging
 import mimetypes
 import multiprocessing
 import os
 import queue
 import uuid
-from urllib import request
+from urllib import error, request
+
+logger = logging.getLogger("thenag.transcription")
 
 # Maps our language names to Whisper's language codes.
 # Whisper uses standard ISO 639-1 codes for most languages.
@@ -55,6 +58,9 @@ PHASE_1_LANGUAGES = ["hindi", "english", "bengali", "tamil", "telugu"]
 # after 60 seconds. Hosted Groq transcription is preferred when configured.
 DEFAULT_MODEL_SIZE = "small"
 LOCAL_TRANSCRIPTION_TIMEOUT_SECONDS = 60
+GROQ_TRANSCRIPTION_TIMEOUT_SECONDS = 60
+# Groq sits behind Cloudflare, which 403s urllib's default User-Agent.
+GROQ_HEADERS = {"User-Agent": "TheNag/1.0", "Accept": "application/json"}
 GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
 
@@ -155,13 +161,19 @@ def _transcribe_with_groq(media_path, language):
         os.getenv("GROQ_TRANSCRIPTION_URL", GROQ_TRANSCRIPTION_URL),
         data=body,
         headers={
+            **GROQ_HEADERS,
             "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         },
         method="POST",
     )
-    with request.urlopen(response, timeout=LOCAL_TRANSCRIPTION_TIMEOUT_SECONDS) as http_response:
-        return _normalise_result(json.loads(http_response.read().decode("utf-8")))
+    try:
+        with request.urlopen(response, timeout=GROQ_TRANSCRIPTION_TIMEOUT_SECONDS) as http_response:
+            return _normalise_result(json.loads(http_response.read().decode("utf-8")))
+    except error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", "replace")[:500]
+        logger.warning("Groq transcription HTTP %s: %s", exc.code, body_text)
+        raise RuntimeError(f"Groq transcription failed: HTTP {exc.code}: {body_text}") from exc
 
 
 def _transcribe_locally_with_timeout(media_path, language, model_size, timeout_seconds):
@@ -207,7 +219,11 @@ def transcribe_audio(media_path, language=None, model_size=DEFAULT_MODEL_SIZE,
     }
     """
     if os.getenv("GROQ_API_KEY"):
-        return _transcribe_with_groq(media_path, language)
+        try:
+            return _transcribe_with_groq(media_path, language)
+        except Exception as exc:
+            logger.warning("Groq transcription failed (%s); falling back to local Whisper %r", exc, DEFAULT_MODEL_SIZE)
+            model_size = DEFAULT_MODEL_SIZE
     return _transcribe_locally_with_timeout(media_path, language, model_size, timeout_seconds)
 
 

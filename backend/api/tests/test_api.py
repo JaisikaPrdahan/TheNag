@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 
@@ -5,6 +6,8 @@ import sys
 for _key in ("GROQ_API_KEY", "HINDSIGHT_API_URL", "HINDSIGHT_API_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
              "GOOGLE_REFRESH_TOKEN", "NOTION_API_KEY", "NOTION_DATABASE_ID", "ENABLE_LOCAL_WHISPER"):
     os.environ[_key] = ""
+import tempfile
+os.environ["THENAG_STORE_PATH"] = os.path.join(tempfile.mkdtemp(), "store.json")  # never touch the real backend/data/store.json
 os.environ["DEMO_SEED"] = "true"  # most tests here exercise the seeded demo feed; DEMO_SEED off is tested explicitly below
 from types import SimpleNamespace
 
@@ -349,3 +352,27 @@ def test_empty_state_bootstrap_and_confidence_label(monkeypatch):
     result = client.post("/api/process-caption", json={"caption": "Python developer hiring at Emptyco Ltd"}).json()
     assert result["personalized"] is False
     assert result["source_detail"]["observation_count"] == 0
+
+
+def test_groq_403_does_not_break_link_pipeline(monkeypatch):
+    from urllib import error
+    from pipeline import providers
+
+    def forbidden(*args, **kwargs):
+        raise error.HTTPError("https://api.groq.com", 403, "Forbidden", {}, io.BytesIO(b'{"error":"blocked"}'))
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(providers.request, "urlopen", forbidden)
+    body = _ingest_link(monkeypatch, "Analyst hiring at Fallbackco Ltd", "Jobs & Gigs", "green", [])
+    assert body["company"] == "Fallbackco Ltd"
+    assert "provider_warning" in body
+
+
+def test_store_survives_reload_and_accept_still_works(monkeypatch, tmp_path):
+    monkeypatch.setenv("THENAG_STORE_PATH", str(tmp_path / "store.json"))
+    item = _ingest_link(monkeypatch, "Analyst hiring at Persistco Ltd", "Jobs & Gigs", "green", [])
+    client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"})
+    state = app_module._load_store(app_module.load_state(False))  # what a fresh process does at startup
+    restored = next(o for o in state["opportunities"] if o["id"] == item["id"])
+    assert restored["status"] == "accepted" and restored["notion_page_id"]
+    assert any(a["opportunity_id"] == item["id"] for a in state["actions"])

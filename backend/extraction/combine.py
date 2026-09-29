@@ -18,6 +18,7 @@ classification happens to run.
 
 import hashlib
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -108,7 +109,11 @@ def run_extraction(media_path_or_url, temp_frame_dir="./_temp_frames", languages
 
     transcript = None
     if media_type == "video":
-        transcript = transcribe_audio(media_path, language=None)
+        try:
+            transcript = transcribe_audio(media_path, language=None)
+        except Exception as exc:  # never fail the request over audio; caption + OCR still work
+            logging.getLogger("thenag.extraction").warning("Transcription failed (%s); continuing without transcript", exc)
+            transcript = None
 
     source_languages = set()
     if transcript and transcript.get("detected_language"):

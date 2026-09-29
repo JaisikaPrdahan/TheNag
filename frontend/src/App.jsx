@@ -3,6 +3,7 @@ import { BarChart3, Bell, Brain, BriefcaseBusiness, ChevronDown, CircleCheck, Cl
 import OpportunityCard from './components/OpportunityCard.jsx'
 import WhyPanel from './components/WhyPanel.jsx'
 import IntakeModal from './components/IntakeModal.jsx'
+import { apiFetch } from './api.js'
 import DraftPanel from './components/DraftPanel.jsx'
 
 const nav = [
@@ -28,19 +29,21 @@ function MemoryRail({ memories }) { return <aside className="memory-rail"><div c
 
 export default function App() {
   const [data,setData] = useState({opportunities:[],sources:[],memories:[],reflect:null,user:{}}); const [draft,setDraft] = useState(null); const [loaded,setLoaded] = useState(false); const [active,setActive] = useState('feed'); const [why,setWhy] = useState(null); const [intake,setIntake] = useState(false); const [query,setQuery] = useState(''); const [category,setCategory] = useState('All'); const [toast,setToast] = useState(''); const [mobileNav,setMobileNav] = useState(false)
-  useEffect(()=>{ fetch('/api/bootstrap').then(r=>r.ok?r.json():Promise.reject()).then(api=>setData(current=>({...current,...api,memories:api.memories||[]}))).catch(()=>{}).finally(()=>setLoaded(true)) },[])
+  const loadFeed = () => apiFetch('/api/bootstrap').then(api=>setData(current=>({...current,...api,memories:api.memories||[]}))).catch(e=>flash(e.message)).finally(()=>setLoaded(true))
+  useEffect(()=>{ loadFeed() },[])
   const opportunities = useMemo(()=>data.opportunities.filter(item => (active!=='saved'||item.status==='saved') && (category==='All'||item.category===category) && `${item.title||''} ${item.company||''} ${item.skills?.join(' ')||''}`.toLowerCase().includes(query.toLowerCase())),[data,active,category,query])
   const flash = msg => { setToast(msg); setTimeout(()=>setToast(''),4000) }
   const patch = (id, fields) => setData(current=>({...current, opportunities:current.opportunities.map(o=>o.id===id?{...o,...fields}:o)}))
   const action = async (item, next) => {
     patch(item.id,{status:next})
     try {
-      const response = await fetch(`/api/opportunities/${item.id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:next})})
-      if (!response.ok) throw new Error()
-      const result = await response.json()
+      const result = await apiFetch(`/api/opportunities/${item.id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:next})})
       if (next==='accepted') { patch(item.id,{confirmation:result.confirmation||[]}); flash((result.confirmation||[]).map(c=>c.label).join(' · ')||'Accepted—nothing was submitted.') }
       else flash(`Marked as ${next}. Memory updated.`)
-    } catch { patch(item.id,{status:item.status}); flash('Could not reach the API—that action was not saved.') }
+    } catch (e) {
+      patch(item.id,{status:item.status})
+      if (e.status===404) { flash('This item no longer exists — refresh'); loadFeed() } else flash(e.message)
+    }
   }
   const processed = item => { setData(current=>({...current,opportunities:[item,...current.opportunities]})); setIntake(false); setWhy(item); flash('Processed with memory and source history.') }
   const reflect = data.reflect || {period:'Last 7 days',stats:{saved:0,accepted:0,skipped:0,follow_through:'0%'},insights:[],skills:[],nudge:''}

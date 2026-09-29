@@ -83,7 +83,34 @@ def load_state(demo_seed: bool) -> dict:
     return {"demo_user": dict(EMPTY_USER), "sources": [], "opportunities": [], "memories": [], "actions": []}
 
 
-seed = load_state(demo_seed_enabled())
+def _store_path() -> Path:
+    return Path(os.getenv("THENAG_STORE_PATH") or BACKEND_DIR / "data" / "store.json")
+
+
+def _load_store(state: dict) -> dict:
+    """Overlays persisted opportunities/actions (statuses, calendar/Notion IDs
+    included) onto the initial state so they survive a restart."""
+    try:
+        saved = json.loads(_store_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return state
+    state["opportunities"] = saved.get("opportunities", state["opportunities"])
+    state["actions"] = saved.get("actions", state["actions"])
+    return state
+
+
+def _save_store() -> None:
+    path = _store_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"opportunities": opportunities, "actions": seed["actions"]}, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.warning("Could not persist the opportunity store to %s", path, exc_info=True)
+
+
+seed = _load_store(load_state(demo_seed_enabled()))
 opportunities = seed["opportunities"]
 sources = seed["sources"]
 source_by_name = {source["name"]: source for source in sources}
@@ -189,7 +216,11 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     duplicate = _recall_duplicate_hint(user_id, extracted["title"], extracted["company"]) or duplicate_status(extracted, opportunities)
     rank, why, next_action = rank_and_explain(extracted, memories, source, duplicate)
     rank = _apply_source_trust(extracted, rank, why)
-    opportunity_id = f"processed-{len(opportunities) + 1}"
+    existing_ids = {item["id"] for item in opportunities}
+    number = len(opportunities) + 1
+    while f"processed-{number}" in existing_ids:
+        number += 1
+    opportunity_id = f"processed-{number}"
     result = {
         "id": opportunity_id, **extracted,
         "source_trust": source["trust_score"], "source_detail": source,
@@ -201,6 +232,7 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
         "recalled_memories": [m.get("text", m.get("content", "Remembered preference")) for m in memories[:4]],
     }
     opportunities.insert(0, result)
+    _save_store()
     try:
         memory_provider.remember(
             user_id, f"Viewed {result['title']} at {result['company']}",
@@ -423,6 +455,7 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
         )
     except Exception:
         logger.warning("Source-trust retain failed for source_creator=%s", opportunity.get("source_creator"), exc_info=True)
+    _save_store()
     return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result, "confirmation": _confirmation(action_result)}
 
 
