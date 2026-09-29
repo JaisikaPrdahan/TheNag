@@ -1,6 +1,10 @@
 import os
 import sys
 
+# app.py loads backend/.env without overriding real env vars, so blank every provider key first to keep tests offline.
+for _key in ("GROQ_API_KEY", "HINDSIGHT_API_URL", "HINDSIGHT_API_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+             "GOOGLE_REFRESH_TOKEN", "NOTION_API_KEY", "NOTION_DATABASE_ID", "ENABLE_LOCAL_WHISPER"):
+    os.environ[_key] = ""
 os.environ["DEMO_SEED"] = "true"  # most tests here exercise the seeded demo feed; DEMO_SEED off is tested explicitly below
 from types import SimpleNamespace
 

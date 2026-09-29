@@ -26,6 +26,11 @@ logger = logging.getLogger("thenag.api")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+from dotenv import load_dotenv  # noqa: E402
+
+# backend/.env fills in anything not already set; real environment variables win.
+load_dotenv(BACKEND_DIR / ".env", override=False)
+
 from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
 from memory import DemoMemoryProvider, build_memory_provider, demo_seed_enabled, build_source_trust_provider, redact_for_memory  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
