@@ -1,3 +1,73 @@
+# Handoff — what's left
+
+## CURRENT STATE
+
+- The link pipeline is implemented: Reel URL → extraction → classification →
+  private memory/source trust → ranking and Why panel → Accept action. Caption
+  and upload remain reliable fallback inputs.
+- The API uses mock/deterministic providers without credentials. Groq hosted
+  transcription, Hindsight Cloud, Google Calendar, and Notion are therefore
+  still mocked in this checkout.
+- Current test results: API **16/16**, classification **34/34**, OCR **16/16**
+  (includes the cache-hit and caption/OCR-on-timeout paths), audio **5/5**
+  (includes the hard timeout worker-termination path).
+- Local CPU transcription now uses Whisper `small` in a separate process with
+  a 60-second hard timeout. Groq hosted transcription is used when
+  `GROQ_API_KEY` is available.
+
+## KNOWN ISSUES
+
+- The requested target Reel cache is not populated yet. One real retrieval
+  attempt was made on 2026-09-29; it stopped because FFmpeg is not on this
+  machine's PATH. Do not retry in a loop. Install FFmpeg, then make one real
+  run to create `backend/demo/cached_reels/<hash>.json`.
+- `backend/.env` has blank values for `GROQ_API_KEY`, `HINDSIGHT_API_URL`,
+  `HINDSIGHT_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+  `GOOGLE_REFRESH_TOKEN`, `NOTION_API_KEY`, and `NOTION_DATABASE_ID`.
+- The local `openai-whisper`/PyTorch install is large and was not completed on
+  this machine. Unit tests still run because Whisper is imported only when a
+  real local transcription is requested.
+
+## TO-DO CHECKLIST
+
+- [x] **Anyone:** add Groq-hosted transcription, a bounded local fallback, and
+  focused timeout/cache tests.
+- [ ] **Anyone:** after FFmpeg is installed, run
+  `https://www.instagram.com/reels/DbfsdUnvDqM/` once to create its authentic
+  cached extraction.
+- [ ] **Jaisika:** create/share the Groq, Hindsight (promo code `MEMHACK99`),
+  Google Calendar (OAuth refresh token), and Notion keys.
+- [ ] **Jaisika:** open and merge the PR for `jaisika/actions-api`.
+- [ ] **Jaisika:** decide whether scholarships/exams come back and whether
+  green-confidence dates should auto-add to the calendar without Accept.
+- [ ] **Anyone:** fill `backend/.env`, run `seed_hindsight.py`, and confirm the
+  **Memory: Hindsight Cloud** badge.
+- [ ] **Anyone:** run the real end-to-end Reel test: card + Why panel → Accept
+  → real calendar event + Notion page.
+- [ ] **Anyone:** record the demo video and complete the content deliverables:
+  article + LinkedIn post per person and one team video; never mention
+  "hackathon".
+
+## HOW TO CONTINUE
+
+Current branch: `laaibah/demo-ready`, based on `jaisika/actions-api`.
+
+```powershell
+git fetch origin
+git switch laaibah/demo-ready
+git pull --ff-only
+```
+
+Activate the relevant existing environment before running a component:
+
+```powershell
+backend\api\venv\Scripts\Activate.ps1
+backend\classification\venv\Scripts\Activate.ps1
+backend\extraction\ocr\venv\Scripts\Activate.ps1
+backend\extraction\audio\venv\Scripts\Activate.ps1
+backend\actions\venv\Scripts\Activate.ps1
+```
+
 # Windows setup guide
 
 Step-by-step setup for running TheNag's full stack on Windows, including the

@@ -8,7 +8,14 @@ against a real reel is a manual step, see the README.
 """
 
 import unittest
-from transcription import get_whisper_language_code, PHASE_1_LANGUAGES, LANGUAGE_CODE_MAP
+from unittest.mock import patch
+
+from transcription import (
+    LANGUAGE_CODE_MAP,
+    PHASE_1_LANGUAGES,
+    get_whisper_language_code,
+    transcribe_audio,
+)
 
 
 class TestLanguageCodeLookup(unittest.TestCase):
@@ -37,6 +44,30 @@ class TestLanguageCodeLookup(unittest.TestCase):
         # its Whisper code.
         for lang in PHASE_1_LANGUAGES:
             self.assertIn(lang, LANGUAGE_CODE_MAP)
+
+    def test_local_timeout_terminates_worker_and_skips_transcript(self):
+        class HungProcess:
+            def __init__(self, *args, **kwargs):
+                self.terminated = False
+
+            def start(self):
+                pass
+
+            def join(self, timeout=None):
+                pass
+
+            def is_alive(self):
+                return True
+
+            def terminate(self):
+                self.terminated = True
+
+        worker = HungProcess()
+        with patch("transcription.multiprocessing.Process", return_value=worker):
+            result = transcribe_audio("demo.mp4", timeout_seconds=0.01)
+
+        self.assertIsNone(result)
+        self.assertTrue(worker.terminated)
 
 
 if __name__ == "__main__":
