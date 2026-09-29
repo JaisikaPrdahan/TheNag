@@ -114,6 +114,11 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
     except _NoVideoInPost:
         pass  # fall through to the photo-post path below
     except Exception as e:
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            raise AutoFetchFailed(
+                "Instagram rate-limited this request. TheNag will not retry automatically; "
+                "please use a cached reel later or upload the file directly instead."
+            ) from e
         raise AutoFetchFailed(
             "Couldn't automatically fetch this post — it may be private, deleted, "
             "or the link may be invalid. Please save it and upload it directly instead."
@@ -129,6 +134,11 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
             "post_date": post_date,
         }
     except Exception as e:
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            raise AutoFetchFailed(
+                "Instagram rate-limited this request. TheNag will not retry automatically; "
+                "please use a cached reel later or upload the file directly instead."
+            ) from e
         raise AutoFetchFailed(
             "Couldn't automatically fetch this photo post — this can happen due to "
             "Instagram rate limits, a private post, or a multi-image carousel (not "
