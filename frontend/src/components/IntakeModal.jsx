@@ -23,7 +23,7 @@ export default function IntakeModal({ onClose, onProcessed }) {
         throw new Error('API unavailable')
       }
       onProcessed(await response.json())
-    } catch { onProcessed({ title:'Frontend Engineer', company:'Demo Company', location:'Bengaluru', work_mode:'Remote', employment_type:'Full-time', skills:['React','TypeScript'], experience:'1–2 years', compensation:'Not provided', deadline:'12 October', source_creator:source || '@newsource', category:'Jobs & Gigs', extraction_confidence:84, source_trust:60, rank:86, status:'new', duplicate:{status:'new',label:'New opportunity',changes:[]}, why:['Remote React work matches your remembered preferences.','This is a new source, so confidence remains cautious.'], recommended_action:'Review and prepare a draft application' }) }
+    } catch { setLinkError('The API is unavailable, so nothing was processed. Start the backend and try again.') }
     finally { setLoading(false) }
   }
   return <div className="modal-backdrop"><div className="intake-modal">

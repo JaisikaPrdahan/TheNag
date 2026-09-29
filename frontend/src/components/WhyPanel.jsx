@@ -2,6 +2,7 @@ import { Brain, CheckCircle2, Database, History, ShieldCheck, X } from 'lucide-r
 
 export default function WhyPanel({ item, onClose }) {
   if (!item) return null
+  const personal = !!item.personalized
   const confidence = Math.round(item.extraction_confidence * .7 + item.source_trust * .3)
   return <div className="drawer-backdrop" onClick={onClose}>
     <aside className="why-drawer" onClick={e => e.stopPropagation()}>
@@ -9,8 +10,8 @@ export default function WhyPanel({ item, onClose }) {
       <div className="eyebrow"><Brain size={15}/> Memory-informed result</div>
       <h2>Why this opportunity?</h2>
       <p className="drawer-subtitle">A plain-language summary of what influenced this result—never hidden reasoning or raw prompts.</p>
-      <div className="match-score"><strong>{item.rank}%</strong><div><b>Personal match</b><span>Based on your saved preferences and decisions</span></div></div>
-      <section><h4>What matched your memory</h4>
+      <div className="match-score"><strong>{item.rank}%</strong><div><b>{personal ? 'Personal match' : 'Confidence'}</b><span>{personal ? 'Based on your saved preferences and decisions' : 'Based on extraction quality and source trust—no preference memory yet'}</span></div></div>
+      <section><h4>{personal ? 'What matched your memory' : 'What informed this result'}</h4>
         <div className="reason-list">{item.why?.map((reason, i) => <div key={i}><CheckCircle2 size={17}/><span>{reason}</span></div>)}</div>
       </section>
       <section><h4><History size={15}/> Seen before</h4>

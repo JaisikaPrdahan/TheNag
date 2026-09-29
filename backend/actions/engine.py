@@ -95,7 +95,8 @@ def accept_opportunity(opportunity: dict, opportunities: list[dict], calendar_pr
         )
         opportunity["notion_page_id"] = note["id"]
         opportunity["notes"] = {"status": "confirmed", "change_log": []}
-        return {"kind": "calendar_event", "calendar_event_id": event["id"], "notion_page_id": note["id"]}
+        return {"kind": "calendar_event", "calendar_event_id": event["id"], "notion_page_id": note["id"],
+                "calendar_url": event.get("url"), "notion_url": note.get("url")}
 
     status = "uncertain category" if category_uncertain else ("needs confirmation" if has_deadline else "note only")
     note = notes_provider.create_note(
@@ -103,4 +104,4 @@ def accept_opportunity(opportunity: dict, opportunities: list[dict], calendar_pr
     )
     opportunity["notion_page_id"] = note["id"]
     opportunity["notes"] = {"status": status, "change_log": []}
-    return {"kind": "note_only", "notion_page_id": note["id"], "status": status}
+    return {"kind": "note_only", "notion_page_id": note["id"], "notion_url": note.get("url"), "status": status}

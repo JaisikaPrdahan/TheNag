@@ -18,23 +18,33 @@ def _first(pattern: str, text: str, default: str = "Not provided") -> str:
     return match.group(1).strip(" .,-") if match else default
 
 
+def _confident(value: str, min_len: int = 3) -> str:
+    """Returns "" for fragments (too short, or starting mid-word in lowercase)."""
+    value = (value or "").strip(" .,-")
+    if len(value) < min_len or not value[0].isupper():
+        return ""
+    return value
+
+
 def heuristic_extract(caption: str) -> dict:
     text = " ".join((caption or "").split())
     lower = text.lower()
     category = "Interviews & Hiring Drives" if any(k in lower for k in DRIVE_MARKERS) else (
         "Jobs & Gigs" if any(k in lower for k in JOB_MARKERS) else "Uncertain"
     )
-    company = _first(r"(?:at|@|for|company[:\s]+)\s*([A-Z][A-Za-z0-9 &.-]{2,35})", text)
-    title = _first(r"(?:hiring|opening for|role[:\s]+|position[:\s]+)\s*(?:a|an)?\s*([A-Za-z][A-Za-z /&+-]{2,45}?)(?:\s+(?:at|for|in|—|-)|[.!]|$)", text)
+    company = _confident(_first(r"(?:\b(?:at|for)\b|@|\bcompany[:\s]+)\s*([A-Z][A-Za-z0-9 &.-]{2,35})", text, ""))
+    title = _confident(_first(r"(?:\bhiring\b|\bopening for\b|\brole[:\s]+|\bposition[:\s]+)\s*(?:a|an)?\s*([A-Za-z][A-Za-z /&+-]{2,45}?)(?:\s+(?:at|for|in|—|-)|[.!]|$)", text, ""))
+    if category == "Uncertain":
+        company = title = ""  # no job signal at all: any match is a fragment, not a listing
     deadline = _first(r"(?:deadline|apply by|last date)[:\s-]+([0-9]{1,2}[ /-][A-Za-z0-9]+(?:[ /-][0-9]{2,4})?)", text, "Not provided")
     location = _first(r"(?:location|in)[:\s-]+(Bengaluru|Bangalore|Mumbai|Delhi|Hyderabad|Pune|Chennai|Noida|Gurugram|Gurgaon|Kolkata)", text)
     compensation = _first(r"((?:₹|INR|Rs\.?)[\s]?[0-9,.]+(?:\s*(?:LPA|per month|/month|/project))?)", text)
     links = re.findall(r"https?://[^\s)]+", text)
     source = _first(r"(?:source|creator|posted by)[:\s@]+([A-Za-z0-9_.-]+)", text, "caption upload")
     evidence = [segment.strip() for segment in re.split(r"[.!\n]", text) if segment.strip()][:4]
-    filled = sum(value != "Not provided" for value in (title, company, location, deadline, compensation))
+    filled = sum(bool(value) and value != "Not provided" for value in (title, company, location, deadline, compensation))
     return {
-        "title": title if title != "Not provided" else ("Walk-in opportunity" if category.startswith("Interviews") else "New opportunity"),
+        "title": title,
         "company": company,
         "location": location,
         "work_mode": "Remote" if any(k in lower for k in REMOTE_MARKERS) else ("On-site" if location != "Not provided" else "Not specified"),
@@ -54,7 +64,9 @@ def heuristic_extract(caption: str) -> dict:
 def duplicate_status(current: dict, opportunities: list[dict]) -> dict:
     best = None
     best_ratio = 0.0
-    needle = f"{current['title']} {current['company']}".lower()
+    needle = f"{current['title']} {current['company']}".strip().lower()
+    if not needle:
+        return {"status": "new", "label": "New opportunity", "changes": []}
     for previous in opportunities:
         ratio = SequenceMatcher(None, needle, f"{previous.get('title', '')} {previous.get('company', '')}".lower()).ratio()
         if ratio > best_ratio:
@@ -95,7 +107,11 @@ def rank_and_explain(opportunity: dict, memories: list[dict], source: dict, dupl
         reasons.append("Rank reduced because you usually prefer remote or hybrid work.")
     trust = source.get("trust_score", 65)
     score += round((trust - 65) * 0.22)
-    reasons.append(f"Source trust is {trust}% from {source.get('observation_count', 0)} shared observations.")
+    observations = source.get("observation_count", 0)
+    if observations:
+        reasons.append(f"Source trust is {trust}% from {observations} shared observations.")
+    else:
+        reasons.append(f"Source trust is {trust}% (default): 0 shared observations for this source yet.")
     if duplicate["status"] == "exact":
         score -= 18
         reasons.append("Rank reduced because you have already seen the same listing.")
@@ -123,11 +139,7 @@ def weekly_reflect(actions: list[dict], opportunities: list[dict]) -> dict:
     return {
         "period": "Last 7 days",
         "stats": {"saved": len(saved), "accepted": len(accepted), "skipped": len(skipped), "follow_through": f"{round(len(accepted) / max(len(saved), 1) * 100)}%"},
-        "insights": [
-            f"You saved {len(saved)} opportunities and moved forward with {len(accepted)}.",
-            "Remote frontend roles consistently receive your strongest signals.",
-            "You usually skip unpaid or on-site roles outside your preferred cities.",
-        ],
-        "skills": [name for name, _ in sorted(top_skills.items(), key=lambda item: item[1], reverse=True)[:5]] or ["React", "Python", "SQL"],
-        "nudge": "Shortlist two saved roles for focused applications before adding more.",
+        "insights": [f"You saved {len(saved)} opportunities and moved forward with {len(accepted)}."] if actions else [],
+        "skills": [name for name, _ in sorted(top_skills.items(), key=lambda item: item[1], reverse=True)[:5]],
+        "nudge": "Shortlist two saved roles for focused applications before adding more." if saved else "",
     }

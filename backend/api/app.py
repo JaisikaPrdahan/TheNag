@@ -27,7 +27,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
-from memory import DemoMemoryProvider, build_memory_provider, build_source_trust_provider, redact_for_memory  # noqa: E402
+from memory import DemoMemoryProvider, build_memory_provider, demo_seed_enabled, build_source_trust_provider, redact_for_memory  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
 
@@ -67,7 +67,18 @@ def run_extraction(media_path_or_url: str) -> dict:
 
 
 SEED_PATH = BACKEND_DIR / "demo" / "seed.json"
-seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+EMPTY_USER = {"id": "demo-user", "name": "", "headline": "", "location": "", "avatar": ""}
+
+
+def load_state(demo_seed: bool) -> dict:
+    """Initial in-memory state. Empty unless DEMO_SEED=true: real Reels and
+    real user actions are the only things that should show up by default."""
+    if demo_seed:
+        return json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    return {"demo_user": dict(EMPTY_USER), "sources": [], "opportunities": [], "memories": [], "actions": []}
+
+
+seed = load_state(demo_seed_enabled())
 opportunities = seed["opportunities"]
 sources = seed["sources"]
 source_by_name = {source["name"]: source for source in sources}
@@ -179,6 +190,8 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
         "source_trust": source["trust_score"], "source_detail": source,
         "duplicate": duplicate, "rank": rank, "why": why,
         "recommended_action": next_action, "status": "new",
+        # True only when recalled preference/decision memory fed the result; otherwise the Why panel says "Confidence".
+        "personalized": any((m.get("metadata") or {}).get("kind") in {"preference", "decision"} for m in memories),
         "draft_only": True, "memory_mode": memory_mode, "inference_mode": inference_mode,
         "recalled_memories": [m.get("text", m.get("content", "Remembered preference")) for m in memories[:4]],
     }
@@ -212,15 +225,31 @@ def _apply_classified_dates(extracted: dict, classified) -> None:
         extracted["deadline_confidence"] = primary_date["confidence"]
 
 
+LLM_TEXT_LIMIT = 6000
+_EMPTY_LLM_VALUES = {"", "unknown", "not provided", "n/a", "none", "null", "not specified"}
+
+
+def _llm_extract(extracted: dict, text: str) -> None:
+    """Overlays Groq's extraction of `text` onto `extracted` (in place),
+    ignoring empty/placeholder values so heuristics still fill the gaps."""
+    if not os.getenv("GROQ_API_KEY"):
+        return
+    try:
+        result = GroqOpportunityExtractor().extract(text[:LLM_TEXT_LIMIT])
+    except Exception:
+        extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
+        return
+    extracted.update({
+        k: v for k, v in result.items()
+        if v and not (isinstance(v, str) and v.strip().lower() in _EMPTY_LLM_VALUES)
+    })
+
+
 def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
     if not caption.strip():
         raise HTTPException(422, "Caption text is required")
     extracted = heuristic_extract(caption)
-    if os.getenv("GROQ_API_KEY"):
-        try:
-            extracted.update({k: v for k, v in GroqOpportunityExtractor().extract(caption).items() if v})
-        except Exception:
-            extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
+    _llm_extract(extracted, caption)
     if source_creator:
         extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
     classified = classify_extraction({"caption_text": caption, "hashtags": [], "post_date": None, "ocr_results": [], "transcript": None})
@@ -245,6 +274,8 @@ def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     classified = classify_extraction(extraction)
     combined_text = _combined_text(extraction)
     extracted = heuristic_extract(combined_text)
+    _llm_extract(extracted, combined_text)
+    # The classifier's category and date confidence always win over the LLM's.
     extracted["category"] = classified.primary_category
     extracted["category_confidence"] = classified.overall_confidence
     _apply_classified_dates(extracted, classified)
@@ -270,11 +301,32 @@ def _reflect(user_id: str) -> dict:
     return weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
 
 
+def _confirmation(action_result: dict | None) -> list[dict]:
+    """Human-readable outcome of an accept: what was created and where (with
+    a link when a real provider produced one; "mock" when keys are missing)."""
+    if not action_result:
+        return []
+    items = []
+    if action_result.get("calendar_event_id"):
+        mock = calendar_mode != "google-calendar"
+        items.append({"kind": "calendar", "mock": mock, "url": action_result.get("calendar_url"),
+                      "label": "Added to calendar (mock — no Google keys set)" if mock else "Added to Google Calendar"})
+    elif action_result.get("kind") == "note_only":
+        items.append({"kind": "calendar", "mock": False, "url": None, "label": "No calendar event — deadline not confirmed"})
+    if action_result.get("notion_page_id"):
+        mock = notes_mode != "notion"
+        items.append({"kind": "notes", "mock": mock, "url": action_result.get("notion_url"),
+                      "label": "Note saved (mock — no Notion keys set)" if mock else "Notion page created"})
+    return items
+
+
 @app.get("/api/bootstrap")
 def bootstrap(x_user_id: str | None = Header(default=None)):
     user_id = _user(x_user_id)
     return {
         "user": seed["demo_user"],
+        "memories": seed.get("memories", []),
+        "demo_seed": demo_seed_enabled(),
         "opportunities": sorted(opportunities, key=lambda item: item.get("rank", 0), reverse=True),
         "sources": sources,
         "reflect": _reflect(user_id),
@@ -366,7 +418,7 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
         )
     except Exception:
         logger.warning("Source-trust retain failed for source_creator=%s", opportunity.get("source_creator"), exc_info=True)
-    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result}
+    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result, "confirmation": _confirmation(action_result)}
 
 
 @app.get("/api/reflect")

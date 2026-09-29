@@ -1,5 +1,7 @@
 import os
 import sys
+
+os.environ["DEMO_SEED"] = "true"  # most tests here exercise the seeded demo feed; DEMO_SEED off is tested explicitly below
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -210,7 +212,7 @@ def test_action_updates_private_memory_with_redaction():
 def test_duplicate_detected_via_recall_when_not_in_live_opportunities(monkeypatch):
     fake = _FakeMemoryProvider(recall_result=[{
         "text": "Viewed a role", "metadata": {
-            "kind": "viewed", "opportunity_id": "ghost-opp", "title": "New opportunity", "company": "Recallco Labs",
+            "kind": "viewed", "opportunity_id": "ghost-opp", "title": "", "company": "Recallco Labs",
         },
     }])
     monkeypatch.setattr(app_module, "memory_provider", fake)
@@ -271,3 +273,75 @@ def test_hindsight_failure_falls_back_and_logs_a_warning_not_silently(monkeypatc
         response = client.post("/api/process-caption", json={"caption": "QA Engineer hiring at Warnco, remote role"})
     assert response.status_code == 200
     assert any("falling back" in record.message for record in caplog.records)
+
+
+def test_link_uses_groq_over_combined_caption_ocr_transcript(monkeypatch):
+    seen = {}
+
+    class FakeGroq:
+        def extract(self, text):
+            seen["text"] = text
+            return {"title": "SIH Resource Lead", "company": "TechDoodles", "location": "unknown", "category": "Jobs & Gigs"}
+
+    extraction = _fake_extraction("Caption words")
+    extraction["ocr_results"] = [{"text": "OCR words"}]
+    extraction["transcript"] = {"text": "Transcript words"}
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(app_module, "GroqOpportunityExtractor", FakeGroq)
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Uncertain", "red"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/G/"}).json()
+    assert all(part in seen["text"] for part in ("Caption words", "OCR words", "Transcript words"))
+    assert body["title"] == "SIH Resource Lead" and body["company"] == "TechDoodles"
+    assert body["location"] == "Not provided"  # LLM placeholder "unknown" ignored, heuristic value kept
+    assert body["category"] == "Uncertain" and body["category_confidence"] == "red"  # classifier wins
+
+
+def test_link_without_confident_title_or_company_leaves_them_empty(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    caption = "Everyone wants to win SIH. Comment PPT and I'll send it. #Hackathon"
+    body = _ingest_link(monkeypatch, caption, "Uncertain", "red", [])
+    assert body["title"] == "" and body["company"] == ""
+
+
+def test_accept_returns_mock_confirmation_labels(monkeypatch):
+    resolved = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "green", "raw_text": "20 Nov", "source": "caption"}]
+    item = _ingest_link(monkeypatch, "Analyst hiring at Confirmo Corp, apply by 20 November", "Jobs & Gigs", "green", resolved)
+    body = client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"}).json()
+    labels = [c["label"] for c in body["confirmation"]]
+    assert any("Added to calendar (mock" in label for label in labels)
+    assert any("Note saved (mock" in label for label in labels)
+    assert all(c["mock"] and c["url"] is None for c in body["confirmation"])
+
+
+def test_accept_confirmation_names_real_providers_with_links(monkeypatch):
+    monkeypatch.setattr(app_module, "calendar_mode", "google-calendar")
+    monkeypatch.setattr(app_module, "notes_mode", "notion")
+    items = app_module._confirmation({"kind": "calendar_event", "calendar_event_id": "e1", "calendar_url": "https://cal/e1",
+                                      "notion_page_id": "p1", "notion_url": "https://notion/p1"})
+    assert [(c["label"], c["url"]) for c in items] == [("Added to Google Calendar", "https://cal/e1"), ("Notion page created", "https://notion/p1")]
+
+
+def test_demo_seed_off_starts_empty_and_on_loads_seed(monkeypatch):
+    off = app_module.load_state(False)
+    assert off["opportunities"] == [] and off["sources"] == [] and off["memories"] == [] and off["actions"] == []
+    assert app_module.load_state(True)["opportunities"]
+    monkeypatch.setenv("DEMO_SEED", "false")
+    assert app_module.DemoMemoryProvider().memories == []
+    monkeypatch.setenv("DEMO_SEED", "true")
+    assert app_module.DemoMemoryProvider().memories
+
+
+def test_empty_state_bootstrap_and_confidence_label(monkeypatch):
+    empty = app_module.load_state(False)
+    monkeypatch.setattr(app_module, "seed", empty)
+    monkeypatch.setattr(app_module, "opportunities", empty["opportunities"])
+    monkeypatch.setattr(app_module, "sources", empty["sources"])
+    monkeypatch.setattr(app_module, "source_by_name", {})
+    monkeypatch.setattr(app_module, "memory_provider", _FakeMemoryProvider())
+    monkeypatch.setattr(app_module, "_reflect", lambda user_id: {})
+    body = client.get("/api/bootstrap").json()
+    assert body["opportunities"] == [] and body["memories"] == []
+    result = client.post("/api/process-caption", json={"caption": "Python developer hiring at Emptyco Ltd"}).json()
+    assert result["personalized"] is False
+    assert result["source_detail"]["observation_count"] == 0

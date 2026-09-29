@@ -15,6 +15,11 @@ from urllib import error, request
 from .privacy import redact_for_memory
 
 
+def demo_seed_enabled() -> bool:
+    """Seed data (backend/demo/seed.json) is loaded only when DEMO_SEED=true."""
+    return os.getenv("DEMO_SEED", "false").strip().lower() == "true"
+
+
 def _hindsight_post(base_url: str, api_key: str, path: str, payload: dict) -> dict:
     req = request.Request(
         f"{base_url.rstrip('/')}/{path.lstrip('/')}",
@@ -46,7 +51,8 @@ class MemoryProvider(ABC):
 class DemoMemoryProvider(MemoryProvider):
     def __init__(self, seed_path: str | Path | None = None):
         path = Path(seed_path) if seed_path else Path(__file__).parents[1] / "demo" / "seed.json"
-        seed = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        load_seed = bool(seed_path) or demo_seed_enabled()
+        seed = json.loads(path.read_text(encoding="utf-8")) if load_seed and path.exists() else {}
         self.memories = seed.get("memories", [])
         self.actions = seed.get("actions", [])
 
