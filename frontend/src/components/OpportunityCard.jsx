@@ -11,7 +11,7 @@ export default function OpportunityCard({ item, onWhy, onAction, onDraft, onConf
   return (
     <article className={`opportunity-card ${item.rank >= 85 ? 'top-match' : ''}`}>
       <div className="card-topline">
-        <div className="rank-pill"><Sparkles size={13} /> {item.rank}% match</div>
+        {item.personalized && <div className="rank-pill"><Sparkles size={13} /> {item.rank}% match</div>}
         <div className={`confidence ${confidenceTone(confidence)}`}><span /> {confidence}% confidence</div>
       </div>
       <div className="card-heading">

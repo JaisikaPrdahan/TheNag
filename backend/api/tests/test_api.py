@@ -446,3 +446,37 @@ def test_confirm_date_creates_calendar_event_for_yellow_deadline(monkeypatch):
     assert body["deadline_confidence"] == "green" and body["action_result"]["calendar_event_id"]
     assert any("calendar" in c["label"].lower() for c in body["confirmation"])
     assert client.post("/api/opportunities/nope/confirm-date").status_code == 404
+
+
+def test_compensation_keeps_unit_and_period():
+    from pipeline import heuristic_extract, normalize_compensation
+    assert normalize_compensation("8 LPA") == "8 LPA"
+    assert normalize_compensation("₹8,00,000 per annum") == "₹8,00,000 per annum"
+    assert normalize_compensation("25k/month stipend") == "25k/month stipend"
+    assert normalize_compensation("INR 8") == "Not specified"
+    assert normalize_compensation("8") == "Not specified"
+    assert normalize_compensation("Unpaid") == "Unpaid"
+    assert heuristic_extract("Python developer hiring at Acme Corp, salary 8 LPA")["compensation"] == "8 LPA"
+    assert heuristic_extract("Python developer hiring at Acme Corp, apply by 12 October")["compensation"] == "Not provided"
+
+
+def test_llm_compensation_is_normalized(monkeypatch):
+    class FakeGroq:
+        def extract(self, text):
+            return {"compensation": "INR 8"}
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(app_module, "GroqOpportunityExtractor", FakeGroq)
+    body = _ingest_link(monkeypatch, "Analyst hiring at Payco Ltd", "Jobs & Gigs", "green", [])
+    assert body["compensation"] == "Not specified"
+
+
+def test_placeholder_creator_is_treated_as_missing(monkeypatch):
+    extraction = {**_fake_extraction("Analyst hiring at Ghostco Ltd"), "source_creator": "reel_owner"}
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Jobs & Gigs", "green"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/P/", "source_creator": "User"}).json()
+    assert body["source_creator"] == "@reel_owner"
+    extraction["source_creator"] = None
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/P/"}).json()
+    assert body["source_creator"] == "Unknown source"

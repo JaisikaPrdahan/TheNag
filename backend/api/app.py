@@ -33,7 +33,7 @@ load_dotenv(BACKEND_DIR / ".env", override=False)
 
 from actions import accept_opportunity, confirm_date, title_at_company, build_calendar_provider, build_notes_provider  # noqa: E402
 from memory import DemoMemoryProvider, build_memory_provider, demo_seed_enabled, build_source_trust_provider, redact_for_memory  # noqa: E402
-from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
+from pipeline import normalize_compensation, duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
 
 sys.path.insert(0, str(BACKEND_DIR / "classification"))
@@ -203,6 +203,7 @@ def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
 
 
 def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
+    extracted["source_creator"] = _real_creator(extracted.get("source_creator")) or "Unknown source"
     source = source_by_name.get(extracted["source_creator"], {
         "name": extracted["source_creator"], "trust_score": 60, "observation_count": 0,
         "assessment": "Not enough history", "evidence": "New source; no shared reliability history yet.",
@@ -280,6 +281,8 @@ def _llm_extract(extracted: dict, text: str) -> None:
         k: v for k, v in result.items()
         if v and not (isinstance(v, str) and v.strip().lower() in _EMPTY_LLM_VALUES)
     })
+    if isinstance(result.get("compensation"), str) and result["compensation"].strip():
+        extracted["compensation"] = normalize_compensation(result["compensation"])
 
 
 def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
@@ -304,6 +307,15 @@ def _combined_text(extraction: dict) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
+_DEFAULT_CREATORS = {"user", "unknown", "unknown source", "caption upload", "n/a", "none", "null"}
+
+
+def _real_creator(value) -> str:
+    """Empty or placeholder creators ("User", "caption upload") count as missing."""
+    value = (value or "").strip()
+    return "" if value.lstrip("@").strip().lower() in _DEFAULT_CREATORS else value
+
+
 def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     if not url.strip():
         raise HTTPException(422, "Link is required")
@@ -318,7 +330,7 @@ def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     _apply_classified_dates(extracted, classified)
     extracted["source_url"] = url
     # User-typed creator wins, then the Reel's own metadata; never the heuristic's guess.
-    creator = source_creator or extraction.get("source_creator") or ""
+    creator = _real_creator(source_creator) or _real_creator(extraction.get("source_creator"))
     extracted["source_creator"] = (creator if creator.startswith("@") else f"@{creator}") if creator else "Unknown source"
     return _finalize(extracted, combined_text, user_id)
 

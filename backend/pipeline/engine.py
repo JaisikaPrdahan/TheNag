@@ -18,6 +18,30 @@ def _first(pattern: str, text: str, default: str = "Not provided") -> str:
     return match.group(1).strip(" .,-") if match else default
 
 
+_COMPENSATION = re.compile(
+    r"(?P<cur>₹|INR|Rs\.?)?\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d[\d,]*(?:\.\d+)?)?"
+    r"(?P<mag>\s?(?:lpa|lakhs?|lacs?|crores?|cr|k|l)\b)?"
+    r"(?P<per>\s*(?:/|per\s+|a\s+)(?:month|mo|annum|year|yr|hour|hr|day|week|project)\b|\s*p\.?a\b\.?|\s*monthly\b)?"
+    r"(?:\s*(?:ctc|stipend)\b)?",
+    re.I,
+)
+NO_COMPENSATION = "Not specified"
+
+
+def normalize_compensation(text: str | None) -> str:
+    """Keeps an amount only with its unit/period (8 LPA, 25k/month, ₹8,00,000
+    per annum, CTC, stipend). A bare number is ambiguous, so it becomes "Not specified"."""
+    text = " ".join((text or "").split())
+    if not text or text == "Not provided":
+        return "Not provided"
+    for match in _COMPENSATION.finditer(text):
+        if match.group("mag") or match.group("per") or re.search(r"ctc|stipend", match.group(0), re.I):
+            return match.group(0).strip(" .,-")
+    if not re.search(r"\d", text):
+        return text  # words like "Unpaid" or "Competitive" carry no misleading number
+    return NO_COMPENSATION
+
+
 def _confident(value: str, min_len: int = 3) -> str:
     """Returns "" for fragments (too short, or starting mid-word in lowercase)."""
     value = (value or "").strip(" .,-")
@@ -38,7 +62,9 @@ def heuristic_extract(caption: str) -> dict:
         company = title = ""  # no job signal at all: any match is a fragment, not a listing
     deadline = _first(r"(?:deadline|apply by|last date)[:\s-]+([0-9]{1,2}[ /-][A-Za-z0-9]+(?:[ /-][0-9]{2,4})?)", text, "Not provided")
     location = _first(r"(?:location|in)[:\s-]+(Bengaluru|Bangalore|Mumbai|Delhi|Hyderabad|Pune|Chennai|Noida|Gurugram|Gurgaon|Kolkata)", text)
-    compensation = _first(r"((?:₹|INR|Rs\.?)[\s]?[0-9,.]+(?:\s*(?:LPA|per month|/month|/project))?)", text)
+    compensation = normalize_compensation(text) if re.search(r"₹|inr|rs\.?|lpa|lakh|lac|ctc|stipend|salary|pay|/month|per month|\dk\b", text, re.I) else "Not provided"
+    if compensation == NO_COMPENSATION and not re.search(r"₹|inr|rs\.?\s?\d", text, re.I):
+        compensation = "Not provided"
     links = re.findall(r"https?://[^\s)]+", text)
     source = _first(r"(?:source|creator|posted by)[:\s@]+([A-Za-z0-9_.-]+)", text, "caption upload")
     evidence = [segment.strip() for segment in re.split(r"[.!\n]", text) if segment.strip()][:4]
