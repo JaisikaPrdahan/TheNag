@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-TheNag turns a shared Instagram Reel about an educational/early-career opportunity (Job, Internship, Scholarship, College/Admission, Interview, Exam, Hackathon/Competition, or Uncertain) into a verified deadline, document checklist, and a single calendar event. Every extracted fact carries a green/yellow/red confidence tag — nothing is silently guessed. Product spec: `docs/spec.md`; ownership and interfaces: `docs/team-structure.md`; locked technical decisions with rationale: `docs/engineering-decisions.md`.
+TheNag is a memory-driven opportunity assistant for job seekers. It turns caption or video input into a structured opportunity, remembers preferences privately, detects listing changes, and prepares draft-only actions. Product overview: `README.md`; ownership and interfaces: `docs/team-structure.md`; data boundary: `docs/database-schema.md`.
 
 ## Pipeline architecture
 
@@ -12,8 +12,8 @@ The backend is a staged pipeline. Each stage is owned by a different team member
 
 1. **Extraction** (`backend/extraction/`, Person 1) — `combine.py::run_extraction(path_or_url)` is the single integration point; callers should use it, not the `ocr/` or `audio/` subsystems directly. It downloads URL input (`ocr/url_downloader.py`, yt-dlp / instaloader), runs Tesseract OCR (`ocr/pipeline.py`), and runs Whisper (`audio/transcription.py`, video only). Output shape is **locked** in `backend/extraction/contracts/extraction_output.md`.
 2. **Classification** (`backend/classification/`, Person 2) — `classifier.py::classify_extraction(extraction)` returns `models.ClassifiedFacts`. Keyword scoring from `keywords.py` (weights: hashtags 3, caption 2, OCR 2, transcript 1), confidence tiers in `confidence.py`, date parsing in `date_resolver.py`. `db_writes.py::classify_and_persist()` wraps it with DB persistence.
-3. **Actions** (`backend/actions/`, Person 3) — verification, calendar event, notes, notifications. Not yet implemented.
-4. **API** (`backend/api/`) — orchestration layer exposing the pipeline to the frontend. Not yet implemented.
+3. **Actions** (`backend/actions/`, Person 3) — `providers.py` has `CalendarProvider`/`NotesProvider` (mock, Google Calendar, Notion — see `backend/actions/README.md`); `engine.py::accept_opportunity()` is the integration point, called from `backend/api/app.py`'s `record_action()`.
+4. **API** (`backend/api/app.py`) — in-memory orchestration layer (seeded from `backend/demo/seed.json`, not the Postgres schema below) exposing `heuristic_extract`/`rank_and_explain` (`backend/pipeline/`) and, for link input, `run_extraction`/`classify_extraction` from stages 1–2. Endpoints: `process-caption`, `process-upload`, `process-link`, `opportunities/{id}/action`, `bootstrap`, `reflect`. `process-link`'s real path needs stage 1's extraction dependencies (Tesseract/FFmpeg/Whisper/yt-dlp/instaloader) installed per `backend/api/requirements.txt`; it's lazily imported so the API and its tests work without them.
 5. **Frontend** (`frontend/`, Vite + React) — planned, not yet in the repo.
 
 ### Contract rules that are easy to get wrong
@@ -22,7 +22,7 @@ The backend is a staged pipeline. Each stage is owned by a different team member
 - **Relative dates must resolve against the reel's `post_date`**, not the current time. `classify_extraction()` already does this (`reference_date = parse_post_date(extraction.get("post_date"))`); any other caller of `resolve_dates()` must pass `reference_date` the same way, or it silently falls back to "now" (this was a real bug — regression test in `classification/tests/test_post_date_regression.py`). `parse_post_date()` itself falls back to "now" only when `post_date` is missing or unparseable (local-file input). Relative dates stay tagged yellow even after resolution.
 - `ocr_results` never contains red-confidence entries (dropped in the OCR pipeline). Transcripts have no confidence score and may be empty (music) or contain hallucinations — don't treat them as green.
 - Whisper model size is locked to `"medium"`; Tesseract (not Cloud Vision) is locked. Check `docs/engineering-decisions.md` before changing any "locked" decision.
-- Classifier category labels (`"Hackathon/Competition"`) differ from DB values (`hackathon_competition`); the mapping is `CATEGORY_TO_DB_VALUE` in `classification/db_writes.py`. A new category must be added there and to the check constraint in `backend/db/migrations/003_opportunities.sql`.
+- Classifier display labels differ from DB values; the mapping is `CATEGORY_TO_DB_VALUE` in `classification/db_writes.py`. A new category must be added there and to the check constraint in `backend/db/migrations/003_opportunities.sql`.
 
 ### Database
 
@@ -30,7 +30,9 @@ Shared Postgres (`backend/db/`): `client.py::get_connection()` (psycopg2, `RealD
 
 ### Imports / module layout
 
-There are no packages or `__init__.py` files. Modules import siblings by bare name and cross-folder access is done via `sys.path.insert` (e.g. `combine.py` adds `ocr/` and `audio/`; `db_writes.py` adds `backend/` to reach `db.client`; tests add their parent folder). Follow the same pattern and run scripts/tests from inside the relevant subsystem folder.
+This applies to stages 1–2 (`extraction/`, `classification/`): no packages or `__init__.py` files there. Modules import siblings by bare name and cross-folder access is done via `sys.path.insert` (e.g. `combine.py` adds `ocr/` and `audio/`; `db_writes.py` adds `backend/` to reach `db.client`; tests add their parent folder). Follow the same pattern and run scripts/tests from inside the relevant subsystem folder. `backend/api/`, `backend/pipeline/`, `backend/memory/`, and `backend/actions/` are proper packages with `__init__.py` instead.
+
+`backend/extraction/ocr`'s OCR pipeline module is named `ocr_pipeline.py` (not `pipeline.py`) specifically to avoid colliding with `backend/pipeline`'s own bare name when both get imported into the same process (`app.py` does, for `/api/process-link`).
 
 ## Environment setup
 

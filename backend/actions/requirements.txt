@@ -1,0 +1,3 @@
+# providers.py is stdlib-only (urllib) by design -- no google-api-python-client
+# or notion-client SDK dependency.
+pytest==8.3.4

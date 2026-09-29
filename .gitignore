@@ -7,3 +7,10 @@ _temp_frames/
 _downloaded_videos/
 extracted_audio*.wav
 .pytest_cache/
+
+# Frontend build and package-manager artifacts
+frontend/node_modules/
+frontend/node_modules.incomplete-recovery/
+frontend/dist/
+.npm-cache/
+.claude/

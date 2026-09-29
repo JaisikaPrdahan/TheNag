@@ -27,8 +27,8 @@ def _mock_conn(fetchone_result=None):
 
 
 def test_category_db_value_mapping():
-    assert db_writes._category_db_value("Hackathon/Competition") == "hackathon_competition"
-    assert db_writes._category_db_value("College/Admission") == "college_admission"
+    assert db_writes._category_db_value("Jobs & Gigs") == "jobs_gigs"
+    assert db_writes._category_db_value("Interviews & Hiring Drives") == "interviews_hiring_drives"
     assert db_writes._category_db_value("Uncertain") == "uncertain"
 
 
@@ -76,10 +76,10 @@ def test_create_opportunity_inserts_and_returns_id():
     conn, cursor = _mock_conn(fetchone_result={"id": "opp-123"})
 
     classified = ClassifiedFacts(
-        primary_category="Job",
-        secondary_categories=["Interview"],
+        primary_category="Jobs & Gigs",
+        secondary_categories=["Interviews & Hiring Drives"],
         extracted_facts=[
-            ExtractedFact(value="Job", confidence="green", fact_type="category", source="hashtags"),
+            ExtractedFact(value="Jobs & Gigs", confidence="green", fact_type="category", source="hashtags"),
         ],
     )
 
@@ -91,7 +91,7 @@ def test_create_opportunity_inserts_and_returns_id():
     assert "insert into opportunities" in sql
     assert params[0] == "reel-1"
     assert params[1] == "user-1"
-    assert params[2] == "job"  # mapped from "Job"
+    assert params[2] == "jobs_gigs"  # mapped from display category
 
 
 def test_classify_and_persist_happy_path(monkeypatch):

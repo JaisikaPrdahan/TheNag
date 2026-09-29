@@ -98,7 +98,7 @@ def _detect_date_type(text, start, end):
         ("event_date", [
             "event date",
             "event on",
-            "hackathon on",
+            "competition on",
             "finale",
         ]),
         ("timeline", [
