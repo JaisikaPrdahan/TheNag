@@ -23,6 +23,7 @@ from pydantic import BaseModel
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
 from memory import DemoMemoryProvider, build_memory_provider  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
@@ -81,6 +82,8 @@ opportunities = seed["opportunities"]
 sources = seed["sources"]
 source_by_name = {source["name"]: source for source in sources}
 memory_provider, memory_mode = build_memory_provider()
+calendar_provider, calendar_mode = build_calendar_provider()
+notes_provider, notes_mode = build_notes_provider()
 inference_mode = "groq" if os.getenv("GROQ_API_KEY") else "demo-heuristics"
 
 app = FastAPI(title="TheNag API", version="1.0.0")
@@ -254,6 +257,9 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
     if not opportunity:
         raise HTTPException(404, "Opportunity not found")
     opportunity["status"] = payload.action
+    action_result = None
+    if payload.action == "accepted":
+        action_result = accept_opportunity(opportunity, opportunities, calendar_provider, notes_provider)
     user_id = _user(x_user_id)
     event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason}
     seed["actions"].append(event)
@@ -262,7 +268,7 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
         f"{payload.action.title()} {opportunity['title']} at {opportunity['company']}. Reason: {payload.reason or 'not provided'}",
         {"kind": "decision", "opportunity_id": opportunity_id, "action": payload.action},
     )
-    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", [])}
+    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result}
 
 
 @app.get("/api/reflect")

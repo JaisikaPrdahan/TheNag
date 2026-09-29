@@ -8,6 +8,7 @@ from .providers import (
     build_calendar_provider,
     build_notes_provider,
 )
+from .engine import accept_opportunity
 
 __all__ = [
     "CalendarProvider",
@@ -18,4 +19,5 @@ __all__ = [
     "NotionProvider",
     "build_calendar_provider",
     "build_notes_provider",
+    "accept_opportunity",
 ]
