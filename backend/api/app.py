@@ -8,6 +8,7 @@ product walkthrough.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -17,6 +18,8 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+logger = logging.getLogger("thenag.api")
+
 # Resolve first: test runners can import this module through a path containing
 # ``tests/..`` and a purely lexical ``parents`` lookup would otherwise point
 # at the test directory instead of the backend directory.
@@ -24,7 +27,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
-from memory import DemoMemoryProvider, build_memory_provider  # noqa: E402
+from memory import DemoMemoryProvider, build_memory_provider, build_source_trust_provider, redact_for_memory  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
 
@@ -69,6 +72,7 @@ opportunities = seed["opportunities"]
 sources = seed["sources"]
 source_by_name = {source["name"]: source for source in sources}
 memory_provider, memory_mode = build_memory_provider()
+source_trust_provider, source_trust_mode = build_source_trust_provider()
 calendar_provider, calendar_mode = build_calendar_provider()
 notes_provider, notes_mode = build_notes_provider()
 inference_mode = "groq" if os.getenv("GROQ_API_KEY") else "demo-heuristics"
@@ -102,6 +106,59 @@ def _user(user_id: str | None) -> str:
     return user_id or "demo-user"
 
 
+def _opportunity_memory_metadata(opportunity_id: str, opportunity: dict) -> dict:
+    return {
+        "opportunity_id": opportunity_id,
+        "title": opportunity.get("title"),
+        "company": opportunity.get("company"),
+        "deadline": opportunity.get("deadline"),
+        "source_creator": opportunity.get("source_creator"),
+    }
+
+
+def _recall_duplicate_hint(user_id: str, title: str, company: str) -> dict | None:
+    """Checks private memory for a prior sighting of this title+company that
+    isn't in the live in-memory `opportunities` list -- lets "seen before"
+    survive a process restart instead of dying with that list."""
+    try:
+        memories = memory_provider.recall(user_id, f"{title} {company}")
+    except Exception:
+        logger.warning("Hindsight recall failed during duplicate check for user_id=%s; falling back to the in-memory list only", user_id, exc_info=True)
+        return None
+    live_ids = {item["id"] for item in opportunities}
+    for memory in memories:
+        meta = memory.get("metadata", {})
+        previous_id = meta.get("opportunity_id")
+        if previous_id and previous_id not in live_ids and meta.get("title") == title and meta.get("company") == company:
+            return {
+                "status": "resurfaced",
+                "label": "Seen before — recalled from memory, not from this session",
+                "changes": [],
+                "previous_id": previous_id,
+            }
+    return None
+
+
+def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
+    """Recalls shared, aggregate source-trust facts (never a user's private
+    bank -- see backend/memory/README.md) and folds them into rank + the Why
+    panel."""
+    source_creator = extracted.get("source_creator")
+    try:
+        facts = source_trust_provider.recall(source_creator)
+    except Exception:
+        logger.warning("Source-trust recall failed for source_creator=%s", source_creator, exc_info=True)
+        return rank
+    negative_kinds = {"dead_link", "rejected_as_fake"}
+    negative = sum(1 for fact in facts if fact.get("metadata", {}).get("kind") in negative_kinds)
+    if negative:
+        rank = max(8, rank - 6 * negative)
+        why.append(f"Shared source-trust memory has {negative} report(s) of dead or fake listings from {source_creator}.")
+    elif facts:
+        why.append(f"Shared source-trust memory has {len(facts)} prior observation(s) of {source_creator}, none negative.")
+    return rank
+
+
 def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     source = source_by_name.get(extracted["source_creator"], {
         "name": extracted["source_creator"], "trust_score": 60, "observation_count": 0,
@@ -110,12 +167,15 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     try:
         memories = memory_provider.recall(user_id, memory_query)
     except Exception:
+        logger.warning("Hindsight recall failed for user_id=%s; falling back to demo memory", user_id, exc_info=True)
         memories = DemoMemoryProvider().recall(user_id, memory_query)
         extracted["memory_warning"] = "Hindsight Cloud was unavailable; demo memory was used."
-    duplicate = duplicate_status(extracted, opportunities)
+    duplicate = _recall_duplicate_hint(user_id, extracted["title"], extracted["company"]) or duplicate_status(extracted, opportunities)
     rank, why, next_action = rank_and_explain(extracted, memories, source, duplicate)
+    rank = _apply_source_trust(extracted, rank, why)
+    opportunity_id = f"processed-{len(opportunities) + 1}"
     result = {
-        "id": f"processed-{len(opportunities) + 1}", **extracted,
+        "id": opportunity_id, **extracted,
         "source_trust": source["trust_score"], "source_detail": source,
         "duplicate": duplicate, "rank": rank, "why": why,
         "recommended_action": next_action, "status": "new",
@@ -123,7 +183,13 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
         "recalled_memories": [m.get("text", m.get("content", "Remembered preference")) for m in memories[:4]],
     }
     opportunities.insert(0, result)
-    memory_provider.remember(user_id, f"Viewed {result['title']} at {result['company']}", {"kind": "viewed", "opportunity_id": result["id"]})
+    try:
+        memory_provider.remember(
+            user_id, f"Viewed {result['title']} at {result['company']}",
+            {"kind": "viewed", **_opportunity_memory_metadata(opportunity_id, result)},
+        )
+    except Exception:
+        logger.warning("Hindsight retain failed for user_id=%s on ingest", user_id, exc_info=True)
     return result
 
 
@@ -193,6 +259,17 @@ def health():
     return {"status": "ok", "memory": memory_mode, "inference": inference_mode, "draft_only": True}
 
 
+def _reflect(user_id: str) -> dict:
+    try:
+        remote = memory_provider.reflect(user_id)
+    except Exception:
+        remote = None
+        logger.warning("Hindsight reflect failed for user_id=%s; falling back to local weekly_reflect", user_id, exc_info=True)
+    if remote:
+        return remote
+    return weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+
+
 @app.get("/api/bootstrap")
 def bootstrap(x_user_id: str | None = Header(default=None)):
     user_id = _user(x_user_id)
@@ -200,8 +277,11 @@ def bootstrap(x_user_id: str | None = Header(default=None)):
         "user": seed["demo_user"],
         "opportunities": sorted(opportunities, key=lambda item: item.get("rank", 0), reverse=True),
         "sources": sources,
-        "reflect": weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities),
-        "modes": {"memory": memory_mode, "inference": inference_mode, "transcription": "whisper" if os.getenv("ENABLE_LOCAL_WHISPER") == "true" else "demo"},
+        "reflect": _reflect(user_id),
+        "modes": {
+            "memory": memory_mode, "source_trust": source_trust_mode, "inference": inference_mode,
+            "transcription": "whisper" if os.getenv("ENABLE_LOCAL_WHISPER") == "true" else "demo",
+        },
     }
 
 
@@ -245,6 +325,17 @@ def process_link(payload: LinkInput, x_user_id: str | None = Header(default=None
         raise HTTPException(422, {"error_type": "AutoFetchFailed", "message": str(exc)})
 
 
+def _source_trust_kind(action: str, reason: str | None) -> str:
+    reason_lower = (reason or "").lower()
+    if "fake" in reason_lower:
+        return "rejected_as_fake"
+    if "dead" in reason_lower or "expired" in reason_lower:
+        return "dead_link"
+    if action == "accepted":
+        return "confirmed"
+    return "neutral"
+
+
 @app.post("/api/opportunities/{opportunity_id}/action")
 def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | None = Header(default=None)):
     if payload.action not in {"saved", "accepted", "rejected", "skipped"}:
@@ -259,15 +350,25 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
     user_id = _user(x_user_id)
     event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason}
     seed["actions"].append(event)
-    memory = memory_provider.remember(
-        user_id,
-        f"{payload.action.title()} {opportunity['title']} at {opportunity['company']}. Reason: {payload.reason or 'not provided'}",
-        {"kind": "decision", "opportunity_id": opportunity_id, "action": payload.action},
-    )
+    decision_text = f"{payload.action.title()} {opportunity['title']} at {opportunity['company']}. Reason: {payload.reason or 'not provided'}"
+    decision_metadata = {"kind": "decision", "action": payload.action, **_opportunity_memory_metadata(opportunity_id, opportunity)}
+    try:
+        memory = memory_provider.remember(user_id, decision_text, decision_metadata)
+    except Exception:
+        logger.warning("Hindsight retain failed for user_id=%s on decision; falling back to demo memory", user_id, exc_info=True)
+        memory = DemoMemoryProvider().remember(user_id, decision_text, decision_metadata)
+    try:
+        safe_reason, _ = redact_for_memory(payload.reason or "not provided")
+        source_trust_provider.remember(
+            opportunity.get("source_creator"),
+            f"{payload.action.title()}: {opportunity['title']} at {opportunity['company']}. Reason: {safe_reason}",
+            {"kind": _source_trust_kind(payload.action, payload.reason), "opportunity_id": opportunity_id},
+        )
+    except Exception:
+        logger.warning("Source-trust retain failed for source_creator=%s", opportunity.get("source_creator"), exc_info=True)
     return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result}
 
 
 @app.get("/api/reflect")
 def reflect(x_user_id: str | None = Header(default=None)):
-    user_id = _user(x_user_id)
-    return weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+    return _reflect(_user(x_user_id))
