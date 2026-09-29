@@ -12,16 +12,28 @@ from app import app
 client = TestClient(app)
 
 
-def _fake_extraction():
+def _fake_extraction(caption="React developer hiring, remote role, apply by 12 October"):
     return {
         "media_type": "video",
-        "caption_text": "React developer hiring, remote role, apply by 12 October",
+        "caption_text": caption,
         "hashtags": ["#hiring"],
         "post_date": "2026-09-01T00:00:00",
         "ocr_results": [],
         "transcript": {"text": ""},
         "source_languages": [],
     }
+
+
+def _classification(category, confidence, resolved_dates=None):
+    return SimpleNamespace(primary_category=category, overall_confidence=confidence, resolved_dates=resolved_dates or [])
+
+
+def _ingest_link(monkeypatch, caption, category, confidence, resolved_dates, source_creator="careergrid"):
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: _fake_extraction(caption))
+    monkeypatch.setattr(app_module, "classify_extraction", lambda extraction: _classification(category, confidence, resolved_dates))
+    response = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/X/", "source_creator": source_creator})
+    assert response.status_code == 200
+    return response.json()
 
 
 def test_bootstrap_has_meaningful_seed_data():
@@ -81,6 +93,64 @@ def test_link_ingest_auto_fetch_failure_returns_typed_error(monkeypatch):
     response = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/BAD/"})
     assert response.status_code == 422
     assert response.json()["detail"]["error_type"] == "AutoFetchFailed"
+
+
+def test_accept_green_date_creates_calendar_event_and_confirmed_note(monkeypatch):
+    body = _ingest_link(monkeypatch, "Frontend Developer hiring at Greenleaf Technologies, remote role, apply by 12 October",
+                         "Jobs & Gigs", "green",
+                         [{"date": "2026-10-12", "date_type": "application_deadline", "confidence": "green", "raw_text": "12 October", "source": "caption"}])
+    response = client.post(f"/api/opportunities/{body['id']}/action", json={"action": "accepted"})
+    assert response.status_code == 200
+    result = response.json()["action_result"]
+    assert result["kind"] == "calendar_event"
+    opportunity = next(o for o in app_module.opportunities if o["id"] == body["id"])
+    assert opportunity["calendar_event_id"] == result["calendar_event_id"]
+    assert opportunity["notion_page_id"] == result["notion_page_id"]
+    assert opportunity["notes"]["status"] == "confirmed"
+
+
+def test_accept_yellow_date_creates_note_only(monkeypatch):
+    body = _ingest_link(monkeypatch, "Backend Engineer hiring at Yellowstone Systems, remote role, apply next Friday",
+                         "Jobs & Gigs", "yellow",
+                         [{"date": "2026-10-20", "date_type": "unknown", "confidence": "yellow", "raw_text": "next Friday", "source": "caption"}])
+    response = client.post(f"/api/opportunities/{body['id']}/action", json={"action": "accepted"})
+    result = response.json()["action_result"]
+    assert result["kind"] == "note_only"
+    assert result["status"] == "needs confirmation"
+    opportunity = next(o for o in app_module.opportunities if o["id"] == body["id"])
+    assert opportunity.get("calendar_event_id") is None
+    assert opportunity["notion_page_id"] == result["notion_page_id"]
+
+
+def test_accept_uncertain_category_creates_note_only(monkeypatch):
+    body = _ingest_link(monkeypatch, "Random unrelated announcement about Mystery Ventures",
+                         "Uncertain", "red", [])
+    response = client.post(f"/api/opportunities/{body['id']}/action", json={"action": "accepted"})
+    result = response.json()["action_result"]
+    assert result["kind"] == "note_only"
+    assert result["status"] == "uncertain category"
+    opportunity = next(o for o in app_module.opportunities if o["id"] == body["id"])
+    assert opportunity.get("calendar_event_id") is None
+
+
+def test_accept_duplicate_of_accepted_opportunity_updates_existing(monkeypatch):
+    caption = "Product Manager hiring at Dupliko Corp, remote role, apply by 20 November"
+    resolved_dates = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "green", "raw_text": "20 November", "source": "caption"}]
+    first = _ingest_link(monkeypatch, caption, "Jobs & Gigs", "green", resolved_dates, source_creator="careergrid")
+    first_accept = client.post(f"/api/opportunities/{first['id']}/action", json={"action": "accepted"}).json()["action_result"]
+
+    second = _ingest_link(monkeypatch, caption, "Jobs & Gigs", "green", resolved_dates, source_creator="careergrid")
+    assert second["duplicate"]["previous_id"] == first["id"]
+
+    response = client.post(f"/api/opportunities/{second['id']}/action", json={"action": "accepted"})
+    result = response.json()["action_result"]
+    assert result["kind"] == "duplicate_update"
+    assert result["calendar_event_id"] == first_accept["calendar_event_id"]
+
+    updated_first = next(o for o in app_module.opportunities if o["id"] == first["id"])
+    assert updated_first["notes"]["change_log"]
+    second_opportunity = next(o for o in app_module.opportunities if o["id"] == second["id"])
+    assert second_opportunity.get("calendar_event_id") is None
 
 
 def test_action_updates_private_memory_with_redaction():
