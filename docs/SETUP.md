@@ -138,6 +138,26 @@ Steps:
   Hindsight Cloud deployment. Without them, `DemoMemoryProvider` (an
   in-process, seeded memory provider) is used automatically.
 
+### 2d. Seeding history into Hindsight (optional)
+
+Once `HINDSIGHT_API_URL`/`HINDSIGHT_API_KEY` are set, the real Hindsight banks
+start empty — none of `backend/demo/seed.json`'s 21 days of fictional history
+is in them yet. `backend/demo/seed_hindsight.py` retains that history (private
+per-user decisions/preferences, and the shared source-trust bank) into the
+real banks, preserving each seed action's original `created_at` timestamp
+(folded into its retained metadata as `occurred_at`).
+
+```powershell
+cd backend\demo
+..\api\venv\Scripts\python.exe seed_hindsight.py
+```
+
+It's idempotent — every retained fact carries a `seed_id`, checked via recall
+before retaining, so running it again skips everything already there instead
+of duplicating it. Safe to run without Hindsight configured too (seeds the
+in-process demo providers instead, useful only for dry-running the script's
+own logic since that state doesn't persist).
+
 ## 3. Python venvs
 
 Each subsystem has its own venv and `requirements.txt` — don't mix them.
