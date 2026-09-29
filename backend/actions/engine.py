@@ -22,6 +22,14 @@ from __future__ import annotations
 from datetime import date
 
 
+def title_at_company(title: str | None, company: str | None) -> str:
+    """"Title at Company", without repeating the company when the title already has it."""
+    title, company = (title or "").strip(), (company or "").strip()
+    if not company or company.lower() in title.lower():
+        return title or company
+    return f"{title} at {company}" if title else company
+
+
 def _note_body(opportunity: dict) -> str:
     return "\n".join([
         f"Category: {opportunity.get('category', 'Uncertain')}",
@@ -52,7 +60,7 @@ def _update_existing(opportunity: dict, previous: dict, calendar_provider, notes
     if previous.get("calendar_event_id"):
         calendar_provider.update_event(
             previous["calendar_event_id"],
-            f"{previous.get('title')} at {previous.get('company')}",
+            title_at_company(previous.get('title'), previous.get('company')),
             _note_body(previous),
             previous.get("deadline"),
         )
@@ -63,7 +71,7 @@ def _update_existing(opportunity: dict, previous: dict, calendar_provider, notes
         notes_provider.append_change_log(previous["notion_page_id"], change_line)
     else:
         note = notes_provider.create_note(
-            f"{previous.get('title')} at {previous.get('company')}", _note_body(previous), notes.get("status", "confirmed"),
+            title_at_company(previous.get('title'), previous.get('company')), _note_body(previous), notes.get("status", "confirmed"),
         )
         previous["notion_page_id"] = note["id"]
 
@@ -87,20 +95,39 @@ def accept_opportunity(opportunity: dict, opportunities: list[dict], calendar_pr
 
     if not category_uncertain and has_deadline and date_confidence == "green":
         event = calendar_provider.create_event(
-            f"{opportunity.get('title')} at {opportunity.get('company')}", _note_body(opportunity), deadline,
+            title_at_company(opportunity.get('title'), opportunity.get('company')), _note_body(opportunity), deadline,
         )
         opportunity["calendar_event_id"] = event["id"]
         note = notes_provider.create_note(
-            f"{opportunity.get('title')} at {opportunity.get('company')}", _note_body(opportunity), "confirmed",
+            title_at_company(opportunity.get('title'), opportunity.get('company')), _note_body(opportunity), "confirmed",
         )
         opportunity["notion_page_id"] = note["id"]
         opportunity["notes"] = {"status": "confirmed", "change_log": []}
-        return {"kind": "calendar_event", "calendar_event_id": event["id"], "notion_page_id": note["id"]}
+        return {"kind": "calendar_event", "calendar_event_id": event["id"], "notion_page_id": note["id"],
+                "calendar_url": event.get("url"), "notion_url": note.get("url")}
 
     status = "uncertain category" if category_uncertain else ("needs confirmation" if has_deadline else "note only")
     note = notes_provider.create_note(
-        f"{opportunity.get('title')} at {opportunity.get('company')}", _note_body(opportunity), status,
+        title_at_company(opportunity.get('title'), opportunity.get('company')), _note_body(opportunity), status,
     )
     opportunity["notion_page_id"] = note["id"]
     opportunity["notes"] = {"status": status, "change_log": []}
-    return {"kind": "note_only", "notion_page_id": note["id"], "status": status}
+    return {"kind": "note_only", "notion_page_id": note["id"], "notion_url": note.get("url"), "status": status}
+
+
+def confirm_date(opportunity: dict, calendar_provider) -> dict:
+    """User-confirmed deadline: marks it green and creates the calendar event
+    that accept withheld for an unconfirmed date."""
+    deadline = opportunity.get("deadline")
+    if not deadline or deadline == "Not provided":
+        raise ValueError("This opportunity has no deadline to confirm")
+    opportunity["deadline_confidence"] = "green"
+    if opportunity.get("notes"):
+        opportunity["notes"]["status"] = "confirmed"
+    if opportunity.get("calendar_event_id"):
+        return {"kind": "calendar_event", "calendar_event_id": opportunity["calendar_event_id"]}
+    event = calendar_provider.create_event(
+        title_at_company(opportunity.get("title"), opportunity.get("company")), _note_body(opportunity), deadline,
+    )
+    opportunity["calendar_event_id"] = event["id"]
+    return {"kind": "calendar_event", "calendar_event_id": event["id"], "calendar_url": event.get("url")}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 
@@ -18,23 +18,59 @@ def _first(pattern: str, text: str, default: str = "Not provided") -> str:
     return match.group(1).strip(" .,-") if match else default
 
 
+_COMPENSATION = re.compile(
+    r"(?P<cur>₹|INR|Rs\.?)?\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d[\d,]*(?:\.\d+)?)?"
+    r"(?P<mag>\s?(?:lpa|lakhs?|lacs?|crores?|cr|k|l)\b)?"
+    r"(?P<per>\s*(?:/|per\s+|a\s+)(?:month|mo|annum|year|yr|hour|hr|day|week|project)\b|\s*p\.?a\b\.?|\s*monthly\b)?"
+    r"(?:\s*(?:ctc|stipend)\b)?",
+    re.I,
+)
+NO_COMPENSATION = "Not specified"
+
+
+def normalize_compensation(text: str | None) -> str:
+    """Keeps an amount only with its unit/period (8 LPA, 25k/month, ₹8,00,000
+    per annum, CTC, stipend). A bare number is ambiguous, so it becomes "Not specified"."""
+    text = " ".join((text or "").split())
+    if not text or text == "Not provided":
+        return "Not provided"
+    for match in _COMPENSATION.finditer(text):
+        if match.group("mag") or match.group("per") or re.search(r"ctc|stipend", match.group(0), re.I):
+            return match.group(0).strip(" .,-")
+    if not re.search(r"\d", text):
+        return text  # words like "Unpaid" or "Competitive" carry no misleading number
+    return NO_COMPENSATION
+
+
+def _confident(value: str, min_len: int = 3) -> str:
+    """Returns "" for fragments (too short, or starting mid-word in lowercase)."""
+    value = (value or "").strip(" .,-")
+    if len(value) < min_len or not value[0].isupper():
+        return ""
+    return value
+
+
 def heuristic_extract(caption: str) -> dict:
     text = " ".join((caption or "").split())
     lower = text.lower()
     category = "Interviews & Hiring Drives" if any(k in lower for k in DRIVE_MARKERS) else (
         "Jobs & Gigs" if any(k in lower for k in JOB_MARKERS) else "Uncertain"
     )
-    company = _first(r"(?:at|@|for|company[:\s]+)\s*([A-Z][A-Za-z0-9 &.-]{2,35})", text)
-    title = _first(r"(?:hiring|opening for|role[:\s]+|position[:\s]+)\s*(?:a|an)?\s*([A-Za-z][A-Za-z /&+-]{2,45}?)(?:\s+(?:at|for|in|—|-)|[.!]|$)", text)
+    company = _confident(_first(r"(?:\b(?:at|for)\b|@|\bcompany[:\s]+)\s*([A-Z][A-Za-z0-9 &.-]{2,35})", text, ""))
+    title = _confident(_first(r"(?:\bhiring\b|\bopening for\b|\brole[:\s]+|\bposition[:\s]+)\s*(?:a|an)?\s*([A-Za-z][A-Za-z /&+-]{2,45}?)(?:\s+(?:at|for|in|—|-)|[.!]|$)", text, ""))
+    if category == "Uncertain":
+        company = title = ""  # no job signal at all: any match is a fragment, not a listing
     deadline = _first(r"(?:deadline|apply by|last date)[:\s-]+([0-9]{1,2}[ /-][A-Za-z0-9]+(?:[ /-][0-9]{2,4})?)", text, "Not provided")
     location = _first(r"(?:location|in)[:\s-]+(Bengaluru|Bangalore|Mumbai|Delhi|Hyderabad|Pune|Chennai|Noida|Gurugram|Gurgaon|Kolkata)", text)
-    compensation = _first(r"((?:₹|INR|Rs\.?)[\s]?[0-9,.]+(?:\s*(?:LPA|per month|/month|/project))?)", text)
+    compensation = normalize_compensation(text) if re.search(r"₹|inr|rs\.?|lpa|lakh|lac|ctc|stipend|salary|pay|/month|per month|\dk\b", text, re.I) else "Not provided"
+    if compensation == NO_COMPENSATION and not re.search(r"₹|inr|rs\.?\s?\d", text, re.I):
+        compensation = "Not provided"
     links = re.findall(r"https?://[^\s)]+", text)
     source = _first(r"(?:source|creator|posted by)[:\s@]+([A-Za-z0-9_.-]+)", text, "caption upload")
     evidence = [segment.strip() for segment in re.split(r"[.!\n]", text) if segment.strip()][:4]
-    filled = sum(value != "Not provided" for value in (title, company, location, deadline, compensation))
+    filled = sum(bool(value) and value != "Not provided" for value in (title, company, location, deadline, compensation))
     return {
-        "title": title if title != "Not provided" else ("Walk-in opportunity" if category.startswith("Interviews") else "New opportunity"),
+        "title": title,
         "company": company,
         "location": location,
         "work_mode": "Remote" if any(k in lower for k in REMOTE_MARKERS) else ("On-site" if location != "Not provided" else "Not specified"),
@@ -54,7 +90,9 @@ def heuristic_extract(caption: str) -> dict:
 def duplicate_status(current: dict, opportunities: list[dict]) -> dict:
     best = None
     best_ratio = 0.0
-    needle = f"{current['title']} {current['company']}".lower()
+    needle = f"{current['title']} {current['company']}".strip().lower()
+    if not needle:
+        return {"status": "new", "label": "New opportunity", "changes": []}
     for previous in opportunities:
         ratio = SequenceMatcher(None, needle, f"{previous.get('title', '')} {previous.get('company', '')}".lower()).ratio()
         if ratio > best_ratio:
@@ -95,7 +133,11 @@ def rank_and_explain(opportunity: dict, memories: list[dict], source: dict, dupl
         reasons.append("Rank reduced because you usually prefer remote or hybrid work.")
     trust = source.get("trust_score", 65)
     score += round((trust - 65) * 0.22)
-    reasons.append(f"Source trust is {trust}% from {source.get('observation_count', 0)} shared observations.")
+    observations = source.get("observation_count", 0)
+    if observations:
+        reasons.append(f"Source trust is {trust}% from {observations} shared observations.")
+    else:
+        reasons.append(f"Source trust is {trust}% (default): 0 shared observations for this source yet.")
     if duplicate["status"] == "exact":
         score -= 18
         reasons.append("Rank reduced because you have already seen the same listing.")
@@ -111,23 +153,47 @@ def rank_and_explain(opportunity: dict, memories: list[dict], source: dict, dupl
     return score, reasons, action
 
 
-def weekly_reflect(actions: list[dict], opportunities: list[dict]) -> dict:
-    saved = [a for a in actions if a.get("action") == "saved"]
-    accepted = [a for a in actions if a.get("action") == "accepted"]
-    skipped = [a for a in actions if a.get("action") in ("skipped", "rejected")]
+def _within_days(timestamp: str | None, days: int, now: datetime) -> bool:
+    """Untimestamped records (seed data only) are treated as recent."""
+    if not timestamp:
+        return True
+    try:
+        moment = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).days < days
+
+
+def weekly_reflect(actions: list[dict], opportunities: list[dict], now: datetime | None = None) -> dict:
+    """Patterns from the user's real actions in the last 7 days. `empty` is true
+    below 3 recorded events so the UI shows an empty state, not made-up insight."""
+    now = now or datetime.now(timezone.utc)
+    recent = [a for a in actions if _within_days(a.get("at"), 7, now)]
+    processed = [o for o in opportunities if _within_days(o.get("created_at"), 7, now)]
+    saved = [a for a in recent if a.get("action") == "saved"]
+    accepted = [a for a in recent if a.get("action") == "accepted"]
+    rejected = [a for a in recent if a.get("action") in ("skipped", "rejected")]
     by_id = {o["id"]: o for o in opportunities}
     top_skills: dict[str, int] = {}
     for action in saved + accepted:
         for skill in by_id.get(action.get("opportunity_id"), {}).get("skills", []):
             top_skills[skill] = top_skills.get(skill, 0) + 1
+    insights = []
+    total = len(processed) + len(recent)
+    if total:
+        insights.append(f"You processed {len(processed)} opportunities, saved {len(saved)}, accepted {len(accepted)} and passed on {len(rejected)}.")
+    for action in rejected:
+        if action.get("reason"):
+            opportunity = by_id.get(action.get("opportunity_id"), {})
+            insights.append(f"Passed on {opportunity.get('title') or opportunity.get('company') or 'a listing'}: " + chr(0x201c) + action["reason"] + chr(0x201d))
     return {
         "period": "Last 7 days",
-        "stats": {"saved": len(saved), "accepted": len(accepted), "skipped": len(skipped), "follow_through": f"{round(len(accepted) / max(len(saved), 1) * 100)}%"},
-        "insights": [
-            f"You saved {len(saved)} opportunities and moved forward with {len(accepted)}.",
-            "Remote frontend roles consistently receive your strongest signals.",
-            "You usually skip unpaid or on-site roles outside your preferred cities.",
-        ],
-        "skills": [name for name, _ in sorted(top_skills.items(), key=lambda item: item[1], reverse=True)[:5]] or ["React", "Python", "SQL"],
-        "nudge": "Shortlist two saved roles for focused applications before adding more.",
+        "empty": total < 3,
+        "stats": {"processed": len(processed), "saved": len(saved), "accepted": len(accepted), "rejected": len(rejected),
+                  "follow_through": f"{round(len(accepted) / max(len(saved) + len(accepted), 1) * 100)}%"},
+        "insights": insights[:6],
+        "skills": [name for name, _ in sorted(top_skills.items(), key=lambda item: item[1], reverse=True)[:5]],
+        "nudge": "Shortlist two saved roles for focused applications before adding more." if saved else "",
     }

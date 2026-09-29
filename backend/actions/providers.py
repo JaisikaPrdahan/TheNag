@@ -117,7 +117,7 @@ class GoogleCalendarProvider(CalendarProvider):
             "summary": summary, "description": description,
             "start": {"date": start_date}, "end": {"date": start_date},
         })
-        return {"id": body["id"], "summary": summary, "description": description, "start_date": start_date}
+        return {"id": body["id"], "summary": summary, "description": description, "start_date": start_date, "url": body.get("htmlLink")}
 
     def update_event(self, event_id, summary, description, start_date):
         body = self._request("PATCH", f"{self.EVENTS_URL}/{event_id}", {
@@ -166,7 +166,7 @@ class NotionProvider(NotesProvider):
                 "paragraph": {"rich_text": [{"text": {"content": body}}]},
             }],
         })
-        return {"id": page["id"], "title": title, "body": body, "status": status, "change_log": []}
+        return {"id": page["id"], "title": title, "body": body, "status": status, "change_log": [], "url": page.get("url")}
 
     def append_change_log(self, page_id, line):
         self._request("PATCH", f"blocks/{page_id}/children", {

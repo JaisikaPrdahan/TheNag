@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -26,9 +27,14 @@ logger = logging.getLogger("thenag.api")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
-from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
-from memory import DemoMemoryProvider, build_memory_provider, build_source_trust_provider, redact_for_memory  # noqa: E402
-from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+# backend/.env fills in anything not already set; real environment variables win.
+load_dotenv(BACKEND_DIR / ".env", override=False)
+
+from actions import accept_opportunity, confirm_date, title_at_company, build_calendar_provider, build_notes_provider  # noqa: E402
+from memory import DemoMemoryProvider, build_memory_provider, demo_seed_enabled, build_source_trust_provider, redact_for_memory  # noqa: E402
+from pipeline import normalize_compensation, duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
 
 sys.path.insert(0, str(BACKEND_DIR / "classification"))
@@ -67,7 +73,45 @@ def run_extraction(media_path_or_url: str) -> dict:
 
 
 SEED_PATH = BACKEND_DIR / "demo" / "seed.json"
-seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+EMPTY_USER = {"id": "demo-user", "name": "", "headline": "", "location": "", "avatar": ""}
+
+
+def load_state(demo_seed: bool) -> dict:
+    """Initial in-memory state. Empty unless DEMO_SEED=true: real Reels and
+    real user actions are the only things that should show up by default."""
+    if demo_seed:
+        return json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    return {"demo_user": dict(EMPTY_USER), "sources": [], "opportunities": [], "memories": [], "actions": []}
+
+
+def _store_path() -> Path:
+    return Path(os.getenv("THENAG_STORE_PATH") or BACKEND_DIR / "data" / "store.json")
+
+
+def _load_store(state: dict) -> dict:
+    """Overlays persisted opportunities/actions (statuses, calendar/Notion IDs
+    included) onto the initial state so they survive a restart."""
+    try:
+        saved = json.loads(_store_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return state
+    state["opportunities"] = saved.get("opportunities", state["opportunities"])
+    state["actions"] = saved.get("actions", state["actions"])
+    return state
+
+
+def _save_store() -> None:
+    path = _store_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"opportunities": opportunities, "actions": seed["actions"]}, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.warning("Could not persist the opportunity store to %s", path, exc_info=True)
+
+
+seed = _load_store(load_state(demo_seed_enabled()))
 opportunities = seed["opportunities"]
 sources = seed["sources"]
 source_by_name = {source["name"]: source for source in sources}
@@ -139,6 +183,70 @@ def _recall_duplicate_hint(user_id: str, title: str, company: str) -> dict | Non
     return None
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _source_stats() -> dict[str, dict]:
+    """Per-creator verdict counts from the persisted store: the latest accept/reject
+    per opportunity. The single source of every observation count in the app."""
+    by_id = {o["id"]: o for o in opportunities}
+    latest = {}
+    for event in seed["actions"]:
+        if event.get("action") in ("accepted", "rejected") and event.get("opportunity_id") in by_id:
+            latest[event["opportunity_id"]] = event
+    stats: dict[str, dict] = {}
+    for opportunity_id, event in latest.items():
+        creator = by_id[opportunity_id].get("source_creator")
+        if not creator:
+            continue
+        counts = stats.setdefault(creator, {"confirmed": 0, "misleading": 0, "changed": 0})
+        kind = _source_trust_kind(event["action"], event.get("reason"))
+        counts["confirmed" if kind == "confirmed" else "misleading" if kind in {"dead_link", "rejected_as_fake"} else "changed"] += 1
+    return stats
+
+
+def _source_for(creator: str | None) -> dict:
+    """Trust record for a creator: seed record in demo mode, otherwise derived from real verdicts.
+    `changed` counts rejections for reasons other than fake/dead."""
+    if creator in source_by_name:
+        return source_by_name[creator]
+    counts = _source_stats().get(creator, {"confirmed": 0, "misleading": 0, "changed": 0})
+    confirmed, misleading, other = counts["confirmed"], counts["misleading"], counts["changed"]
+    observations = confirmed + misleading + other
+    trust = round(100 * (confirmed + 3) / (confirmed + misleading + 5))
+    facts = [text for count, text in ((confirmed, f"accepted {confirmed}"), (misleading, f"rejected {misleading} as fake or dead"),
+                                      (other, f"rejected {other} for other reasons")) if count]
+    return {
+        "id": (creator or "unknown").lstrip("@"), "name": creator, "trust_score": trust, "observation_count": observations,
+        "confirmed": confirmed, "misleading": misleading, "changed": other,
+        "assessment": "Not enough history" if not observations else ("High confidence" if trust >= 80 else "Medium confidence" if trust >= 55 else "Low confidence"),
+        "evidence": ", ".join(facts) or "New source; no shared reliability history yet.",
+    }
+
+
+def _live(item: dict) -> dict:
+    source = _source_for(item.get("source_creator"))
+    return {**item, "source_trust": source["trust_score"], "source_detail": source}
+
+
+def _sources_view() -> list[dict]:
+    creators = list(dict.fromkeys(o["source_creator"] for o in opportunities if o.get("source_creator") and o["source_creator"] != "Unknown source"))
+    records = [_source_for(creator) for creator in creators]
+    records += [s for s in sources if s["name"] not in creators]  # demo seed sources
+    return sorted(records, key=lambda record: record["observation_count"], reverse=True)
+
+
+def _saved_view() -> dict:
+    def newest(item):
+        return item.get("last_action_at") or item.get("created_at") or ""
+    live = [_live(o) for o in opportunities]
+    return {
+        "accepted": sorted((o for o in live if o.get("status") == "accepted"), key=newest, reverse=True),
+        "saved": sorted((o for o in live if o.get("status") == "saved"), key=newest, reverse=True),
+    }
+
+
 def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
     """Recalls shared, aggregate source-trust facts (never a user's private
     bank -- see backend/memory/README.md) and folds them into rank + the Why
@@ -154,16 +262,12 @@ def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
     if negative:
         rank = max(8, rank - 6 * negative)
         why.append(f"Shared source-trust memory has {negative} report(s) of dead or fake listings from {source_creator}.")
-    elif facts:
-        why.append(f"Shared source-trust memory has {len(facts)} prior observation(s) of {source_creator}, none negative.")
     return rank
 
 
 def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
-    source = source_by_name.get(extracted["source_creator"], {
-        "name": extracted["source_creator"], "trust_score": 60, "observation_count": 0,
-        "assessment": "Not enough history", "evidence": "New source; no shared reliability history yet.",
-    })
+    extracted["source_creator"] = _real_creator(extracted.get("source_creator")) or "Unknown source"
+    source = _source_for(extracted["source_creator"])
     try:
         memories = memory_provider.recall(user_id, memory_query)
     except Exception:
@@ -173,19 +277,26 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     duplicate = _recall_duplicate_hint(user_id, extracted["title"], extracted["company"]) or duplicate_status(extracted, opportunities)
     rank, why, next_action = rank_and_explain(extracted, memories, source, duplicate)
     rank = _apply_source_trust(extracted, rank, why)
-    opportunity_id = f"processed-{len(opportunities) + 1}"
+    existing_ids = {item["id"] for item in opportunities}
+    number = len(opportunities) + 1
+    while f"processed-{number}" in existing_ids:
+        number += 1
+    opportunity_id = f"processed-{number}"
     result = {
         "id": opportunity_id, **extracted,
         "source_trust": source["trust_score"], "source_detail": source,
         "duplicate": duplicate, "rank": rank, "why": why,
-        "recommended_action": next_action, "status": "new",
+        "recommended_action": next_action, "status": "new", "created_at": _now(),
+        # True only when recalled preference/decision memory fed the result; otherwise the Why panel says "Confidence".
+        "personalized": any((m.get("metadata") or {}).get("kind") in {"preference", "decision"} for m in memories),
         "draft_only": True, "memory_mode": memory_mode, "inference_mode": inference_mode,
         "recalled_memories": [m.get("text", m.get("content", "Remembered preference")) for m in memories[:4]],
     }
     opportunities.insert(0, result)
+    _save_store()
     try:
         memory_provider.remember(
-            user_id, f"Viewed {result['title']} at {result['company']}",
+            user_id, f"Viewed {title_at_company(result['title'], result['company'])}",
             {"kind": "viewed", **_opportunity_memory_metadata(opportunity_id, result)},
         )
     except Exception:
@@ -212,15 +323,33 @@ def _apply_classified_dates(extracted: dict, classified) -> None:
         extracted["deadline_confidence"] = primary_date["confidence"]
 
 
+LLM_TEXT_LIMIT = 6000
+_EMPTY_LLM_VALUES = {"", "unknown", "not provided", "n/a", "none", "null", "not specified"}
+
+
+def _llm_extract(extracted: dict, text: str) -> None:
+    """Overlays Groq's extraction of `text` onto `extracted` (in place),
+    ignoring empty/placeholder values so heuristics still fill the gaps."""
+    if not os.getenv("GROQ_API_KEY"):
+        return
+    try:
+        result = GroqOpportunityExtractor().extract(text[:LLM_TEXT_LIMIT])
+    except Exception:
+        extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
+        return
+    extracted.update({
+        k: v for k, v in result.items()
+        if v and not (isinstance(v, str) and v.strip().lower() in _EMPTY_LLM_VALUES)
+    })
+    if isinstance(result.get("compensation"), str) and result["compensation"].strip():
+        extracted["compensation"] = normalize_compensation(result["compensation"])
+
+
 def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
     if not caption.strip():
         raise HTTPException(422, "Caption text is required")
     extracted = heuristic_extract(caption)
-    if os.getenv("GROQ_API_KEY"):
-        try:
-            extracted.update({k: v for k, v in GroqOpportunityExtractor().extract(caption).items() if v})
-        except Exception:
-            extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
+    _llm_extract(extracted, caption)
     if source_creator:
         extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
     classified = classify_extraction({"caption_text": caption, "hashtags": [], "post_date": None, "ocr_results": [], "transcript": None})
@@ -238,6 +367,15 @@ def _combined_text(extraction: dict) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
+_DEFAULT_CREATORS = {"user", "unknown", "unknown source", "caption upload", "n/a", "none", "null"}
+
+
+def _real_creator(value) -> str:
+    """Empty or placeholder creators ("User", "caption upload") count as missing."""
+    value = (value or "").strip()
+    return "" if value.lstrip("@").strip().lower() in _DEFAULT_CREATORS else value
+
+
 def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     if not url.strip():
         raise HTTPException(422, "Link is required")
@@ -245,12 +383,15 @@ def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     classified = classify_extraction(extraction)
     combined_text = _combined_text(extraction)
     extracted = heuristic_extract(combined_text)
+    _llm_extract(extracted, combined_text)
+    # The classifier's category and date confidence always win over the LLM's.
     extracted["category"] = classified.primary_category
     extracted["category_confidence"] = classified.overall_confidence
     _apply_classified_dates(extracted, classified)
     extracted["source_url"] = url
-    if source_creator:
-        extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+    # User-typed creator wins, then the Reel's own metadata; never the heuristic's guess.
+    creator = _real_creator(source_creator) or _real_creator(extraction.get("source_creator"))
+    extracted["source_creator"] = (creator if creator.startswith("@") else f"@{creator}") if creator else "Unknown source"
     return _finalize(extracted, combined_text, user_id)
 
 
@@ -265,9 +406,29 @@ def _reflect(user_id: str) -> dict:
     except Exception:
         remote = None
         logger.warning("Hindsight reflect failed for user_id=%s; falling back to local weekly_reflect", user_id, exc_info=True)
-    if remote:
-        return remote
-    return weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+    local = weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+    if remote and remote.get("text"):
+        local["insights"] = [remote["text"], *local["insights"]]  # Hindsight's own read leads
+    return local
+
+
+def _confirmation(action_result: dict | None) -> list[dict]:
+    """Human-readable outcome of an accept: what was created and where (with
+    a link when a real provider produced one; "mock" when keys are missing)."""
+    if not action_result:
+        return []
+    items = []
+    if action_result.get("calendar_event_id"):
+        mock = calendar_mode != "google-calendar"
+        items.append({"kind": "calendar", "mock": mock, "url": action_result.get("calendar_url"),
+                      "label": "Added to calendar (mock — no Google keys set)" if mock else "Added to Google Calendar"})
+    elif action_result.get("kind") == "note_only":
+        items.append({"kind": "calendar", "mock": False, "url": None, "label": "No calendar event — deadline not confirmed"})
+    if action_result.get("notion_page_id"):
+        mock = notes_mode != "notion"
+        items.append({"kind": "notes", "mock": mock, "url": action_result.get("notion_url"),
+                      "label": "Note saved (mock — no Notion keys set)" if mock else "Notion page created"})
+    return items
 
 
 @app.get("/api/bootstrap")
@@ -275,14 +436,27 @@ def bootstrap(x_user_id: str | None = Header(default=None)):
     user_id = _user(x_user_id)
     return {
         "user": seed["demo_user"],
-        "opportunities": sorted(opportunities, key=lambda item: item.get("rank", 0), reverse=True),
-        "sources": sources,
+        "memories": seed.get("memories", []),
+        "demo_seed": demo_seed_enabled(),
+        "opportunities": sorted((_live(o) for o in opportunities), key=lambda item: item.get("rank", 0), reverse=True),
+        "sources": _sources_view(),
+        "saved": _saved_view(),
         "reflect": _reflect(user_id),
         "modes": {
             "memory": memory_mode, "source_trust": source_trust_mode, "inference": inference_mode,
             "transcription": "whisper" if os.getenv("ENABLE_LOCAL_WHISPER") == "true" else "demo",
         },
     }
+
+
+@app.get("/api/saved")
+def saved_view():
+    return _saved_view()
+
+
+@app.get("/api/sources")
+def sources_view():
+    return _sources_view()
 
 
 @app.post("/api/process-caption")
@@ -348,9 +522,13 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
     if payload.action == "accepted":
         action_result = accept_opportunity(opportunity, opportunities, calendar_provider, notes_provider)
     user_id = _user(x_user_id)
-    event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason}
+    now = _now()
+    opportunity["last_action_at"] = now
+    if action_result:
+        opportunity["confirmation"] = _confirmation(action_result)
+    event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason, "at": now}
     seed["actions"].append(event)
-    decision_text = f"{payload.action.title()} {opportunity['title']} at {opportunity['company']}. Reason: {payload.reason or 'not provided'}"
+    decision_text = f"{payload.action.title()} {title_at_company(opportunity['title'], opportunity['company'])}. Reason: {payload.reason or 'not provided'}"
     decision_metadata = {"kind": "decision", "action": payload.action, **_opportunity_memory_metadata(opportunity_id, opportunity)}
     try:
         memory = memory_provider.remember(user_id, decision_text, decision_metadata)
@@ -361,12 +539,28 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
         safe_reason, _ = redact_for_memory(payload.reason or "not provided")
         source_trust_provider.remember(
             opportunity.get("source_creator"),
-            f"{payload.action.title()}: {opportunity['title']} at {opportunity['company']}. Reason: {safe_reason}",
+            f"{payload.action.title()}: {title_at_company(opportunity['title'], opportunity['company'])}. Reason: {safe_reason}",
             {"kind": _source_trust_kind(payload.action, payload.reason), "opportunity_id": opportunity_id},
         )
     except Exception:
         logger.warning("Source-trust retain failed for source_creator=%s", opportunity.get("source_creator"), exc_info=True)
-    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result}
+    _save_store()
+    return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result, "confirmation": _confirmation(action_result)}
+
+
+@app.post("/api/opportunities/{opportunity_id}/confirm-date")
+def confirm_opportunity_date(opportunity_id: str):
+    opportunity = next((item for item in opportunities if item["id"] == opportunity_id), None)
+    if not opportunity:
+        raise HTTPException(404, "Opportunity not found")
+    try:
+        action_result = confirm_date(opportunity, calendar_provider)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    opportunity["confirmation"] = _confirmation(action_result)
+    opportunity["last_action_at"] = _now()
+    _save_store()
+    return {"ok": True, "action_result": action_result, "confirmation": opportunity["confirmation"], "deadline_confidence": "green"}
 
 
 @app.get("/api/reflect")

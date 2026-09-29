@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from urllib import request
+from urllib import error, request
+
+logger = logging.getLogger("thenag.groq")
+# Groq sits behind Cloudflare, which 403s urllib's default User-Agent.
+GROQ_HEADERS = {"User-Agent": "TheNag/1.0", "Accept": "application/json"}
 
 
 class GroqOpportunityExtractor:
@@ -33,9 +38,14 @@ class GroqOpportunityExtractor:
         req = request.Request(
             self.url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers={**GROQ_HEADERS, "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        with request.urlopen(req, timeout=25) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(req, timeout=25) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", "replace")[:500]
+            logger.warning("Groq extraction HTTP %s: %s", exc.code, body_text)
+            raise RuntimeError(f"Groq extraction failed: HTTP {exc.code}: {body_text}") from exc
         return json.loads(body["choices"][0]["message"]["content"])

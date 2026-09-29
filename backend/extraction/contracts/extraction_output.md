@@ -8,6 +8,7 @@ This is the exact shape `run_extraction()` (in `backend/extraction/combine.py`) 
 
     "caption_text": str | None,   # None only for local-file input (no post to read a caption from)
     "hashtags": [str, ...],       # extracted from caption_text; empty list if none found or no caption available
+    "source_creator": str | None,  # OPTIONAL extra: posting account (yt-dlp uploader_id/channel, instaloader owner_username); URL input only, absent in older cached reels.
     "post_date": str | None,      # ISO 8601, the post's own publish date. None only for local-file input.
                                     # Person 2 MUST use this as the reference point for relative-date
                                     # resolution ("next Friday", "in 2 weeks") -- see date_resolver.parse_post_date().

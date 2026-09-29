@@ -78,6 +78,15 @@ This tracks technical decisions made during actual implementation and testing �
 
 **Also confirmed:** music/song content reliably produces empty transcripts regardless of model size — Whisper is built for speech, not sung vocals. Expected behavior, not a bug, and unlikely to matter for TheNag's actual target content.
 
+**2026-09-29 demo-safety note:** the locked comparison remains valid for
+transcript quality, but it is superseded for the live-demo fallback. Local
+CPU transcription now uses `small` in a separate process with a 60-second
+hard timeout; after that timeout the transcript is omitted and caption + OCR
+continue. When `GROQ_API_KEY` is configured, the app uses Groq's hosted
+Whisper-compatible transcription endpoint instead, avoiding the local CPU
+path. Re-evaluate the quality tradeoff with native-speaker validation before
+using this fallback for production decisions.
+
 ---
 
 ## Caption and hashtag extraction: only available for URL input, not local files — locked

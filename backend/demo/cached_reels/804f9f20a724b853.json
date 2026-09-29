@@ -1,0 +1,145 @@
+{
+  "url": "https://www.instagram.com/reels/DbfsdUnvDqM",
+  "extraction": {
+    "media_type": "video",
+    "caption_text": "Everyone wants to win SIH. Very few study how winners actually won. 👀\n\nSo I collected previous SIH winners’ PPTs, GitHub repositories, and resources in one place to help you prepare smarter, not harder. SIH_Winners_Vault_Techdoodles.pdf\n\n💬 Comment “PPT” and I’ll send it to your DM.\n\n#SIH2026 #SmartIndiaHackathon #Hackathon #Engineering #CollegeStudents GitHub TechDoodles AI Coding Innovation Developers ProjectIdeas StudentLife OpenSource TechCommunity",
+    "hashtags": [
+      "SIH2026",
+      "SmartIndiaHackathon",
+      "Hackathon",
+      "Engineering",
+      "CollegeStudents"
+    ],
+    "post_date": "2026-08-01",
+    "ocr_results": [
+      {
+        "text": "SMART INDIA HACKATHON",
+        "timestamp": 2.0,
+        "raw_confidence": 94.66666666666667,
+        "confidence_level": "green"
+      },
+      {
+        "text": "55",
+        "timestamp": 3.0,
+        "raw_confidence": 75.0,
+        "confidence_level": "green"
+      },
+      {
+        "text": "నా, Ke liye Prepare Kar rahe ho",
+        "timestamp": 4.0,
+        "raw_confidence": 89.0,
+        "confidence_level": "green"
+      },
+      {
+        "text": "ட Toh aa Resource Miss mat karna",
+        "timestamp": 5.0,
+        "raw_confidence": 90.28571428571429,
+        "confidence_level": "green"
+      },
+      {
+        "text": "“previous inners ke_| SIH Ke Previous winners ke",
+        "timestamp": 7.0,
+        "raw_confidence": 79.625,
+        "confidence_level": "green"
+      },
+      {
+        "text": "৯৯ సమ్మె a Ministry of (মি MoE’s Education ணர்‌ INNOVATION CELL € కం గ (GOVERNMENT OF INDIA) «= Government of India 6 || . HACKATHON",
+        "timestamp": 8.0,
+        "raw_confidence": 66.44,
+        "confidence_level": "yellow"
+      },
+      {
+        "text": "கோண Milgaye ha",
+        "timestamp": 9.0,
+        "raw_confidence": 71.33333333333333,
+        "confidence_level": "yellow"
+      },
+      {
+        "text": "Sirf Ppts nahi",
+        "timestamp": 11.0,
+        "raw_confidence": 93.33333333333333,
+        "confidence_level": "green"
+      },
+      {
+        "text": "C) GitHub",
+        "timestamp": 14.0,
+        "raw_confidence": 93.5,
+        "confidence_level": "green"
+      },
+      {
+        "text": "Is pack mai 8 winning Presentations",
+        "timestamp": 15.0,
+        "raw_confidence": 92.83333333333333,
+        "confidence_level": "green"
+      },
+      {
+        "text": "07 02 03 04 05 SIH 2025 — Official PPT Template Latest official presentation format - 2025 SIH Winning Deck — Edition A Finalist-grade presentation structure - 2024/25 SIH Winners PPT — 2024 Grand Finale winning presentation - 2024 SIH 2025 — Winning Deck Top-ranked problem statement solution - 2025 SIH Winning PPT — 2024 Jury-approved presentation format - 2024 VIEW PPT — VIEW PPT — VIEW PPT — VIEW PPT — VIEW PPT —",
+        "timestamp": 16.0,
+        "raw_confidence": 92.30666666666667,
+        "confidence_level": "green"
+      },
+      {
+        "text": "25 Github Source codes _",
+        "timestamp": 17.0,
+        "raw_confidence": 85.6,
+        "confidence_level": "green"
+      },
+      {
+        "text": "inhe dekhke tum samajh jdoge ఆ",
+        "timestamp": 22.0,
+        "raw_confidence": 68.0,
+        "confidence_level": "yellow"
+      },
+      {
+        "text": "११ ki winnin 4१9१",
+        "timestamp": 23.0,
+        "raw_confidence": 83.75,
+        "confidence_level": "green"
+      },
+      {
+        "text": "११ ki winning teams ne presentation kaise banayi ११",
+        "timestamp": 24.0,
+        "raw_confidence": 94.66666666666667,
+        "confidence_level": "green"
+      },
+      {
+        "text": "projec",
+        "timestamp": 25.0,
+        "raw_confidence": 96.0,
+        "confidence_level": "green"
+      },
+      {
+        "text": "project kaise structure kiya",
+        "timestamp": 26.0,
+        "raw_confidence": 96.0,
+        "confidence_level": "green"
+      },
+      {
+        "text": "९४ 9 0 aur GitHub kaise main",
+        "timestamp": 27.0,
+        "raw_confidence": 80.14285714285714,
+        "confidence_level": "green"
+      },
+      {
+        "text": "|] 6 % aur GitHub kaise maintain kiya.",
+        "timestamp": 28.0,
+        "raw_confidence": 86.375,
+        "confidence_level": "green"
+      },
+      {
+        "text": "உர",
+        "timestamp": 29.0,
+        "raw_confidence": 65.0,
+        "confidence_level": "yellow"
+      },
+      {
+        "text": "> COMMENT “Link”",
+        "timestamp": 30.0,
+        "raw_confidence": 84.33333333333333,
+        "confidence_level": "green"
+      }
+    ],
+    "transcript": null,
+    "source_languages": []
+  }
+}

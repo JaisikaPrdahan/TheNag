@@ -1,5 +1,15 @@
+import io
+import json
 import os
 import sys
+
+# app.py loads backend/.env without overriding real env vars, so blank every provider key first to keep tests offline.
+for _key in ("GROQ_API_KEY", "HINDSIGHT_API_URL", "HINDSIGHT_API_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+             "GOOGLE_REFRESH_TOKEN", "NOTION_API_KEY", "NOTION_DATABASE_ID", "ENABLE_LOCAL_WHISPER"):
+    os.environ[_key] = ""
+import tempfile
+os.environ["THENAG_STORE_PATH"] = os.path.join(tempfile.mkdtemp(), "store.json")  # never touch the real backend/data/store.json
+os.environ["DEMO_SEED"] = "true"  # most tests here exercise the seeded demo feed; DEMO_SEED off is tested explicitly below
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -210,7 +220,7 @@ def test_action_updates_private_memory_with_redaction():
 def test_duplicate_detected_via_recall_when_not_in_live_opportunities(monkeypatch):
     fake = _FakeMemoryProvider(recall_result=[{
         "text": "Viewed a role", "metadata": {
-            "kind": "viewed", "opportunity_id": "ghost-opp", "title": "New opportunity", "company": "Recallco Labs",
+            "kind": "viewed", "opportunity_id": "ghost-opp", "title": "", "company": "Recallco Labs",
         },
     }])
     monkeypatch.setattr(app_module, "memory_provider", fake)
@@ -249,11 +259,11 @@ def test_accept_retains_a_source_trust_fact_with_redacted_reason(monkeypatch):
 
 
 def test_reflect_uses_hindsight_when_it_returns_a_result(monkeypatch):
-    fake = _FakeMemoryProvider(reflect_result={"period": "From Hindsight", "stats": {}, "insights": ["remote"], "skills": [], "nudge": ""})
+    fake = _FakeMemoryProvider(reflect_result={"text": "From Hindsight"})
     monkeypatch.setattr(app_module, "memory_provider", fake)
     response = client.get("/api/reflect")
     assert response.status_code == 200
-    assert response.json()["period"] == "From Hindsight"
+    assert response.json()["insights"][0] == "From Hindsight"
 
 
 def test_reflect_falls_back_to_local_math_when_hindsight_has_nothing(monkeypatch):
@@ -271,3 +281,252 @@ def test_hindsight_failure_falls_back_and_logs_a_warning_not_silently(monkeypatc
         response = client.post("/api/process-caption", json={"caption": "QA Engineer hiring at Warnco, remote role"})
     assert response.status_code == 200
     assert any("falling back" in record.message for record in caplog.records)
+
+
+def test_link_uses_groq_over_combined_caption_ocr_transcript(monkeypatch):
+    seen = {}
+
+    class FakeGroq:
+        def extract(self, text):
+            seen["text"] = text
+            return {"title": "SIH Resource Lead", "company": "TechDoodles", "location": "unknown", "category": "Jobs & Gigs"}
+
+    extraction = _fake_extraction("Caption words")
+    extraction["ocr_results"] = [{"text": "OCR words"}]
+    extraction["transcript"] = {"text": "Transcript words"}
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(app_module, "GroqOpportunityExtractor", FakeGroq)
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Uncertain", "red"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/G/"}).json()
+    assert all(part in seen["text"] for part in ("Caption words", "OCR words", "Transcript words"))
+    assert body["title"] == "SIH Resource Lead" and body["company"] == "TechDoodles"
+    assert body["location"] == "Not provided"  # LLM placeholder "unknown" ignored, heuristic value kept
+    assert body["category"] == "Uncertain" and body["category_confidence"] == "red"  # classifier wins
+
+
+def test_link_without_confident_title_or_company_leaves_them_empty(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    caption = "Everyone wants to win SIH. Comment PPT and I'll send it. #Hackathon"
+    body = _ingest_link(monkeypatch, caption, "Uncertain", "red", [])
+    assert body["title"] == "" and body["company"] == ""
+
+
+def test_accept_returns_mock_confirmation_labels(monkeypatch):
+    resolved = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "green", "raw_text": "20 Nov", "source": "caption"}]
+    item = _ingest_link(monkeypatch, "Analyst hiring at Confirmo Corp, apply by 20 November", "Jobs & Gigs", "green", resolved)
+    body = client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"}).json()
+    labels = [c["label"] for c in body["confirmation"]]
+    assert any("Added to calendar (mock" in label for label in labels)
+    assert any("Note saved (mock" in label for label in labels)
+    assert all(c["mock"] and c["url"] is None for c in body["confirmation"])
+
+
+def test_accept_confirmation_names_real_providers_with_links(monkeypatch):
+    monkeypatch.setattr(app_module, "calendar_mode", "google-calendar")
+    monkeypatch.setattr(app_module, "notes_mode", "notion")
+    items = app_module._confirmation({"kind": "calendar_event", "calendar_event_id": "e1", "calendar_url": "https://cal/e1",
+                                      "notion_page_id": "p1", "notion_url": "https://notion/p1"})
+    assert [(c["label"], c["url"]) for c in items] == [("Added to Google Calendar", "https://cal/e1"), ("Notion page created", "https://notion/p1")]
+
+
+def test_demo_seed_off_starts_empty_and_on_loads_seed(monkeypatch):
+    off = app_module.load_state(False)
+    assert off["opportunities"] == [] and off["sources"] == [] and off["memories"] == [] and off["actions"] == []
+    assert app_module.load_state(True)["opportunities"]
+    monkeypatch.setenv("DEMO_SEED", "false")
+    assert app_module.DemoMemoryProvider().memories == []
+    monkeypatch.setenv("DEMO_SEED", "true")
+    assert app_module.DemoMemoryProvider().memories
+
+
+def test_empty_state_bootstrap_and_confidence_label(monkeypatch):
+    empty = app_module.load_state(False)
+    monkeypatch.setattr(app_module, "seed", empty)
+    monkeypatch.setattr(app_module, "opportunities", empty["opportunities"])
+    monkeypatch.setattr(app_module, "sources", empty["sources"])
+    monkeypatch.setattr(app_module, "source_by_name", {})
+    monkeypatch.setattr(app_module, "memory_provider", _FakeMemoryProvider())
+    monkeypatch.setattr(app_module, "_reflect", lambda user_id: {})
+    body = client.get("/api/bootstrap").json()
+    assert body["opportunities"] == [] and body["memories"] == []
+    result = client.post("/api/process-caption", json={"caption": "Python developer hiring at Emptyco Ltd"}).json()
+    assert result["personalized"] is False
+    assert result["source_detail"]["observation_count"] == 0
+
+
+def test_groq_403_does_not_break_link_pipeline(monkeypatch):
+    from urllib import error
+    from pipeline import providers
+
+    def forbidden(*args, **kwargs):
+        raise error.HTTPError("https://api.groq.com", 403, "Forbidden", {}, io.BytesIO(b'{"error":"blocked"}'))
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(providers.request, "urlopen", forbidden)
+    body = _ingest_link(monkeypatch, "Analyst hiring at Fallbackco Ltd", "Jobs & Gigs", "green", [])
+    assert body["company"] == "Fallbackco Ltd"
+    assert "provider_warning" in body
+
+
+def test_store_survives_reload_and_accept_still_works(monkeypatch, tmp_path):
+    monkeypatch.setenv("THENAG_STORE_PATH", str(tmp_path / "store.json"))
+    item = _ingest_link(monkeypatch, "Analyst hiring at Persistco Ltd", "Jobs & Gigs", "green", [])
+    client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"})
+    state = app_module._load_store(app_module.load_state(False))  # what a fresh process does at startup
+    restored = next(o for o in state["opportunities"] if o["id"] == item["id"])
+    assert restored["status"] == "accepted" and restored["notion_page_id"]
+    assert any(a["opportunity_id"] == item["id"] for a in state["actions"])
+
+
+def _capture_hindsight(monkeypatch, responses):
+    from memory import providers as mp
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append((req.get_method(), req.full_url, json.loads(req.data or b"{}"), dict(req.header_items())))
+        status, body = responses.pop(0)
+        if status != 200:
+            raise mp.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(b'{"detail":"missing"}'))
+        return io.BytesIO(json.dumps(body).encode())
+
+    monkeypatch.setattr(mp.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def test_hindsight_retain_recall_use_official_paths_and_shapes(monkeypatch):
+    from memory import HindsightCloudProvider
+    monkeypatch.setenv("HINDSIGHT_API_URL", "https://hs.example/")
+    monkeypatch.setenv("HINDSIGHT_API_KEY", "k")
+    calls = _capture_hindsight(monkeypatch, [
+        (404, {}), (200, {}), (200, {"success": True}),  # retain: bank missing -> create -> retry
+        (200, {"results": [{"id": "1", "text": "likes remote", "context": 'thenag-meta:{"kind": "preference"}'}]}),
+    ])
+    provider = HindsightCloudProvider()
+    provider.remember("u1", "likes remote", {"kind": "preference"})
+    method, url, body, headers = calls[0]
+    assert (method, url) == ("POST", "https://hs.example/v1/default/banks/thenag-user-u1/memories")
+    assert body["items"][0]["content"] == "likes remote" and body["items"][0]["context"].startswith("thenag-meta:")
+    assert headers["Authorization"] == "Bearer k" and headers["User-agent"] == "TheNag/1.0"
+    assert calls[1][:2] == ("PUT", "https://hs.example/v1/default/banks/thenag-user-u1")
+    memories = provider.recall("u1", "remote")
+    assert calls[3][1].endswith("/banks/thenag-user-u1/memories/recall") and calls[3][2]["query"] == "remote"
+    assert memories[0]["metadata"] == {"kind": "preference"} and memories[0]["text"] == "likes remote"
+
+
+def test_hindsight_recall_404_means_no_memories(monkeypatch):
+    from memory import HindsightSourceTrustProvider
+    monkeypatch.setenv("HINDSIGHT_API_URL", "https://hs.example")
+    monkeypatch.setenv("HINDSIGHT_API_KEY", "k")
+    _capture_hindsight(monkeypatch, [(404, {})])
+    assert HindsightSourceTrustProvider().recall("@x") == []
+
+
+def test_link_source_creator_comes_from_reel_metadata(monkeypatch):
+    extraction = {**_fake_extraction(), "source_creator": "dmart_careers"}
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Jobs & Gigs", "green"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/M/"}).json()
+    assert body["source_creator"] == "@dmart_careers"
+
+
+def test_title_at_company_does_not_repeat_company():
+    from actions import title_at_company
+    assert title_at_company("Multiple Positions at DMart Hosakote", "DMart") == "Multiple Positions at DMart Hosakote"
+    assert title_at_company("Analyst", "Acme") == "Analyst at Acme"
+    assert title_at_company("", "Acme") == "Acme"
+
+
+def test_confirm_date_creates_calendar_event_for_yellow_deadline(monkeypatch):
+    yellow = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "yellow", "raw_text": "next Friday", "source": "caption"}]
+    item = _ingest_link(monkeypatch, "Analyst hiring at Yellowco Ltd, apply by next Friday", "Jobs & Gigs", "green", yellow)
+    accepted = client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"}).json()
+    assert accepted["action_result"]["kind"] == "note_only"
+    body = client.post(f"/api/opportunities/{item['id']}/confirm-date").json()
+    assert body["deadline_confidence"] == "green" and body["action_result"]["calendar_event_id"]
+    assert any("calendar" in c["label"].lower() for c in body["confirmation"])
+    assert client.post("/api/opportunities/nope/confirm-date").status_code == 404
+
+
+def test_compensation_keeps_unit_and_period():
+    from pipeline import heuristic_extract, normalize_compensation
+    assert normalize_compensation("8 LPA") == "8 LPA"
+    assert normalize_compensation("₹8,00,000 per annum") == "₹8,00,000 per annum"
+    assert normalize_compensation("25k/month stipend") == "25k/month stipend"
+    assert normalize_compensation("INR 8") == "Not specified"
+    assert normalize_compensation("8") == "Not specified"
+    assert normalize_compensation("Unpaid") == "Unpaid"
+    assert heuristic_extract("Python developer hiring at Acme Corp, salary 8 LPA")["compensation"] == "8 LPA"
+    assert heuristic_extract("Python developer hiring at Acme Corp, apply by 12 October")["compensation"] == "Not provided"
+
+
+def test_llm_compensation_is_normalized(monkeypatch):
+    class FakeGroq:
+        def extract(self, text):
+            return {"compensation": "INR 8"}
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setattr(app_module, "GroqOpportunityExtractor", FakeGroq)
+    body = _ingest_link(monkeypatch, "Analyst hiring at Payco Ltd", "Jobs & Gigs", "green", [])
+    assert body["compensation"] == "Not specified"
+
+
+def test_placeholder_creator_is_treated_as_missing(monkeypatch):
+    extraction = {**_fake_extraction("Analyst hiring at Ghostco Ltd"), "source_creator": "reel_owner"}
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Jobs & Gigs", "green"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/P/", "source_creator": "User"}).json()
+    assert body["source_creator"] == "@reel_owner"
+    extraction["source_creator"] = None
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/P/"}).json()
+    assert body["source_creator"] == "Unknown source"
+
+
+def _fresh_store(monkeypatch, tmp_path):
+    empty = app_module.load_state(False)
+    monkeypatch.setenv("THENAG_STORE_PATH", str(tmp_path / "store.json"))
+    monkeypatch.setattr(app_module, "seed", empty)
+    monkeypatch.setattr(app_module, "opportunities", empty["opportunities"])
+    monkeypatch.setattr(app_module, "sources", [])
+    monkeypatch.setattr(app_module, "source_by_name", {})
+    monkeypatch.setattr(app_module, "memory_provider", _FakeMemoryProvider())
+    monkeypatch.setattr(app_module, "source_trust_provider", _FakeSourceTrustProvider())
+
+
+def test_tab_endpoints_are_empty_without_data(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    assert client.get("/api/saved").json() == {"accepted": [], "saved": []}
+    assert client.get("/api/sources").json() == []
+    reflect = client.get("/api/reflect").json()
+    assert reflect["empty"] is True and reflect["insights"] == []
+
+
+def test_tabs_reflect_real_actions_and_observation_counts_agree(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    resolved = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "green", "raw_text": "20 Nov", "source": "caption"}]
+    a = _ingest_link(monkeypatch, "Analyst hiring at Alphaco Ltd, apply by 20 November", "Jobs & Gigs", "green", resolved, source_creator="goodsrc")
+    b = _ingest_link(monkeypatch, "Designer hiring at Betaco Ltd", "Jobs & Gigs", "green", [], source_creator="goodsrc")
+    c = _ingest_link(monkeypatch, "Writer hiring at Gammaco Ltd", "Jobs & Gigs", "green", [], source_creator="goodsrc")
+    post = lambda item, action, reason=None: client.post(f"/api/opportunities/{item['id']}/action", json={"action": action, "reason": reason})
+    post(a, "accepted"); post(b, "saved"); post(c, "rejected", "this looks fake")
+
+    saved = client.get("/api/saved").json()
+    assert [o["id"] for o in saved["accepted"]] == [a["id"]] and [o["id"] for o in saved["saved"]] == [b["id"]]
+    assert any("calendar" in x["label"].lower() for x in saved["accepted"][0]["confirmation"])
+
+    sources = client.get("/api/sources").json()
+    assert len(sources) == 1 and sources[0]["name"] == "@goodsrc"
+    assert sources[0]["observation_count"] == 2 and sources[0]["confirmed"] == 1 and sources[0]["misleading"] == 1
+    assert "accepted 1" in sources[0]["evidence"] and "rejected 1 as fake" in sources[0]["evidence"]
+
+    feed = client.get("/api/bootstrap").json()
+    assert {o["source_detail"]["observation_count"] for o in feed["opportunities"]} == {2}
+    assert {o["source_trust"] for o in feed["opportunities"]} == {sources[0]["trust_score"]}
+    assert feed["saved"] == saved and sources[0]["trust_score"] == round(100 * 4 / 7)
+
+    reflect = client.get("/api/reflect").json()
+    assert reflect["empty"] is False and reflect["stats"]["accepted"] == 1 and reflect["stats"]["processed"] == 3
+    assert any("this looks fake" in line for line in reflect["insights"])
+
+    post(b, "skipped")  # un-save removes it from Saved
+    assert client.get("/api/saved").json()["saved"] == []

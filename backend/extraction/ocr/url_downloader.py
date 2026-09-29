@@ -103,32 +103,44 @@ def download_media_from_url(url, output_dir="./_downloaded_media"):
     unique_id = uuid.uuid4().hex
 
     try:
-        path, caption_text, post_date = _download_video(url, output_dir, unique_id)
+        path, caption_text, post_date, source_creator = _download_video(url, output_dir, unique_id)
         return {
             "path": path,
             "media_type": "video",
             "caption_text": caption_text,
             "hashtags": extract_hashtags(caption_text),
             "post_date": post_date,
+            "source_creator": source_creator,
         }
     except _NoVideoInPost:
         pass  # fall through to the photo-post path below
     except Exception as e:
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            raise AutoFetchFailed(
+                "Instagram rate-limited this request. TheNag will not retry automatically; "
+                "please use a cached reel later or upload the file directly instead."
+            ) from e
         raise AutoFetchFailed(
             "Couldn't automatically fetch this post — it may be private, deleted, "
             "or the link may be invalid. Please save it and upload it directly instead."
         ) from e
 
     try:
-        path, caption_text, post_date = _download_via_instaloader(url, output_dir, unique_id)
+        path, caption_text, post_date, source_creator = _download_via_instaloader(url, output_dir, unique_id)
         return {
             "path": path,
             "media_type": "image",
             "caption_text": caption_text,
             "hashtags": extract_hashtags(caption_text),
             "post_date": post_date,
+            "source_creator": source_creator,
         }
     except Exception as e:
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            raise AutoFetchFailed(
+                "Instagram rate-limited this request. TheNag will not retry automatically; "
+                "please use a cached reel later or upload the file directly instead."
+            ) from e
         raise AutoFetchFailed(
             "Couldn't automatically fetch this photo post — this can happen due to "
             "Instagram rate limits, a private post, or a multi-image carousel (not "
@@ -191,7 +203,10 @@ def _download_video(url, output_dir, unique_id):
     if raw_upload_date and len(raw_upload_date) == 8:
         post_date = f"{raw_upload_date[0:4]}-{raw_upload_date[4:6]}-{raw_upload_date[6:8]}"
 
-    return downloaded_path, caption_text, post_date
+    # The account that posted it: yt-dlp's uploader_id is the @handle when present.
+    source_creator = result_info.get("uploader_id") or result_info.get("channel") or result_info.get("uploader")
+
+    return downloaded_path, caption_text, post_date, source_creator
 
 
 def _extract_shortcode(url):
@@ -245,4 +260,6 @@ def _download_via_instaloader(url, output_dir, unique_id):
     # both date and time, unlike yt-dlp's date-only string.
     post_date = post.date_utc.isoformat() if post.date_utc else None
 
-    return image_path, caption_text, post_date
+    source_creator = getattr(post, "owner_username", None)
+
+    return image_path, caption_text, post_date, source_creator
