@@ -41,6 +41,10 @@ React dashboard
 
 PostgreSQL stores application records and the shared source-trust bank. Hindsight stores private, per-user memories only. Personal memory is never included in a B2B feed.
 
+For a full step-by-step Windows walkthrough — system installs, every env key
+(including Google Calendar and Notion setup), venvs, tests, and a smoke test
+checklist — see [docs/SETUP.md](docs/SETUP.md).
+
 ## Quick start — demo mode
 
 Requirements: Python 3.11+ and Node.js 20+.
