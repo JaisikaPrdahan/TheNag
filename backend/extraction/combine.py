@@ -93,12 +93,14 @@ def run_extraction(media_path_or_url, temp_frame_dir="./_temp_frames", languages
         caption_text = download_result["caption_text"]
         hashtags = download_result["hashtags"]
         post_date = download_result["post_date"]
+        source_creator = download_result.get("source_creator")
     else:
         media_path = media_path_or_url
         media_type = "image" if media_path.lower().endswith((".jpg", ".jpeg", ".png")) else "video"
         caption_text = None  # no post to read a caption from — this is a bare local file
         hashtags = []
         post_date = None      # no post to read a publish date from either
+        source_creator = None
 
     ocr_results = run_ocr_pipeline(
         media_path,
@@ -124,6 +126,7 @@ def run_extraction(media_path_or_url, temp_frame_dir="./_temp_frames", languages
         "caption_text": caption_text,
         "hashtags": hashtags,
         "post_date": post_date,
+        "source_creator": source_creator,  # optional extension to the contract: the posting account (URL input only)
         "ocr_results": ocr_results,
         "transcript": transcript,
         "source_languages": list(source_languages),

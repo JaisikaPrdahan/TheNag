@@ -31,7 +31,7 @@ from dotenv import load_dotenv  # noqa: E402
 # backend/.env fills in anything not already set; real environment variables win.
 load_dotenv(BACKEND_DIR / ".env", override=False)
 
-from actions import accept_opportunity, build_calendar_provider, build_notes_provider  # noqa: E402
+from actions import accept_opportunity, confirm_date, title_at_company, build_calendar_provider, build_notes_provider  # noqa: E402
 from memory import DemoMemoryProvider, build_memory_provider, demo_seed_enabled, build_source_trust_provider, redact_for_memory  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
@@ -235,7 +235,7 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     _save_store()
     try:
         memory_provider.remember(
-            user_id, f"Viewed {result['title']} at {result['company']}",
+            user_id, f"Viewed {title_at_company(result['title'], result['company'])}",
             {"kind": "viewed", **_opportunity_memory_metadata(opportunity_id, result)},
         )
     except Exception:
@@ -317,8 +317,9 @@ def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     extracted["category_confidence"] = classified.overall_confidence
     _apply_classified_dates(extracted, classified)
     extracted["source_url"] = url
-    if source_creator:
-        extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+    # User-typed creator wins, then the Reel's own metadata; never the heuristic's guess.
+    creator = source_creator or extraction.get("source_creator") or ""
+    extracted["source_creator"] = (creator if creator.startswith("@") else f"@{creator}") if creator else "Unknown source"
     return _finalize(extracted, combined_text, user_id)
 
 
@@ -333,9 +334,10 @@ def _reflect(user_id: str) -> dict:
     except Exception:
         remote = None
         logger.warning("Hindsight reflect failed for user_id=%s; falling back to local weekly_reflect", user_id, exc_info=True)
-    if remote:
-        return remote
-    return weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+    local = weekly_reflect([a for a in seed["actions"] if a["user_id"] == user_id], opportunities)
+    if remote and remote.get("text"):
+        local["insights"] = [remote["text"], *local["insights"]]  # Hindsight's own read leads
+    return local
 
 
 def _confirmation(action_result: dict | None) -> list[dict]:
@@ -439,7 +441,7 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
     user_id = _user(x_user_id)
     event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason}
     seed["actions"].append(event)
-    decision_text = f"{payload.action.title()} {opportunity['title']} at {opportunity['company']}. Reason: {payload.reason or 'not provided'}"
+    decision_text = f"{payload.action.title()} {title_at_company(opportunity['title'], opportunity['company'])}. Reason: {payload.reason or 'not provided'}"
     decision_metadata = {"kind": "decision", "action": payload.action, **_opportunity_memory_metadata(opportunity_id, opportunity)}
     try:
         memory = memory_provider.remember(user_id, decision_text, decision_metadata)
@@ -450,13 +452,26 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
         safe_reason, _ = redact_for_memory(payload.reason or "not provided")
         source_trust_provider.remember(
             opportunity.get("source_creator"),
-            f"{payload.action.title()}: {opportunity['title']} at {opportunity['company']}. Reason: {safe_reason}",
+            f"{payload.action.title()}: {title_at_company(opportunity['title'], opportunity['company'])}. Reason: {safe_reason}",
             {"kind": _source_trust_kind(payload.action, payload.reason), "opportunity_id": opportunity_id},
         )
     except Exception:
         logger.warning("Source-trust retain failed for source_creator=%s", opportunity.get("source_creator"), exc_info=True)
     _save_store()
     return {"ok": True, "status": payload.action, "memory_redactions": memory.get("redactions", []), "action_result": action_result, "confirmation": _confirmation(action_result)}
+
+
+@app.post("/api/opportunities/{opportunity_id}/confirm-date")
+def confirm_opportunity_date(opportunity_id: str):
+    opportunity = next((item for item in opportunities if item["id"] == opportunity_id), None)
+    if not opportunity:
+        raise HTTPException(404, "Opportunity not found")
+    try:
+        action_result = confirm_date(opportunity, calendar_provider)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    _save_store()
+    return {"ok": True, "action_result": action_result, "confirmation": _confirmation(action_result), "deadline_confidence": "green"}
 
 
 @app.get("/api/reflect")

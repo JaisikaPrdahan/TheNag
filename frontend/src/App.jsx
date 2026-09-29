@@ -45,6 +45,12 @@ export default function App() {
       if (e.status===404) { flash('This item no longer exists — refresh'); loadFeed() } else flash(e.message)
     }
   }
+  const confirmDate = async item => {
+    try {
+      const result = await apiFetch(`/api/opportunities/${item.id}/confirm-date`,{method:'POST'})
+      patch(item.id,{deadline_confidence:'green',confirmation:result.confirmation||[]}); flash((result.confirmation||[]).map(c=>c.label).join(' · ')||'Date confirmed.')
+    } catch (e) { if (e.status===404) { flash('This item no longer exists — refresh'); loadFeed() } else flash(e.message) }
+  }
   const processed = item => { setData(current=>({...current,opportunities:[item,...current.opportunities]})); setIntake(false); setWhy(item); flash('Processed with memory and source history.') }
   const reflect = data.reflect || {period:'Last 7 days',stats:{saved:0,accepted:0,skipped:0,follow_through:'0%'},insights:[],skills:[],nudge:''}
   const savedCount = data.opportunities.filter(o=>o.status==='saved').length
@@ -56,11 +62,11 @@ export default function App() {
       {active==='reflect'?<Reflect data={reflect}/>:active==='sources'?<Sources sources={data.sources}/>:<div className="feed-layout"><div className="feed-main"><section className="welcome"><div><div className="eyebrow"><Brain size={15}/> Private memory · learns from what you do</div><h1>{active==='saved'?'Worth coming back to.':'Fewer listings. Better fit.'}</h1><p>{active==='saved'?'The opportunities you asked TheNag to remember.':'Because more alerts were never the answer—better memory is.'}</p></div><button className="add-button" onClick={()=>setIntake(true)}><Plus size={18}/> Add opportunity</button></section>
         <div className="feed-controls"><div className="category-tabs">{['All','Jobs & Gigs','Interviews & Hiring Drives'].map(item=><button key={item} className={category===item?'active':''} onClick={()=>setCategory(item)}>{item}</button>)}</div><button className="filter-button"><SlidersHorizontal size={16}/> Filters</button></div>
         <div className="result-copy"><span>{opportunities.length} ranked opportunities</span></div>
-        <div className="opportunity-list">{opportunities.map(item=><OpportunityCard key={item.id} item={item} onWhy={setWhy} onAction={action} onDraft={setDraft}/>)}</div>
+        <div className="opportunity-list">{opportunities.map(item=><OpportunityCard key={item.id} item={item} onWhy={setWhy} onAction={action} onDraft={setDraft} onConfirmDate={confirmDate}/>)}</div>
         {opportunities.length===0&&loaded&&(data.opportunities.length===0
           ?<div className="empty-state"><LayoutGrid/><h3>Paste a Reel link to get started</h3><p>Real Reels you process and real actions you take are all that appear here.</p><button className="add-button" onClick={()=>setIntake(true)}><Plus size={18}/> Add opportunity</button></div>
           :<div className="empty-state"><LayoutGrid/><h3>No opportunities match</h3><p>Try another search, tab or filter.</p></div>)}</div><MemoryRail memories={data.memories}/></div>}
     </main>
-    {why&&<WhyPanel item={why} onClose={()=>setWhy(null)}/>} {draft&&<DraftPanel item={data.opportunities.find(o=>o.id===draft.id)||draft} onClose={()=>setDraft(null)} onAction={action}/>} {intake&&<IntakeModal onClose={()=>setIntake(false)} onProcessed={processed}/>} {toast&&<div className="toast"><CircleCheck size={18}/>{toast}</div>}
+    {why&&<WhyPanel item={why} onClose={()=>setWhy(null)}/>} {draft&&<DraftPanel item={data.opportunities.find(o=>o.id===draft.id)||draft} onClose={()=>setDraft(null)} onAction={action} onConfirmDate={confirmDate}/>} {intake&&<IntakeModal onClose={()=>setIntake(false)} onProcessed={processed}/>} {toast&&<div className="toast"><CircleCheck size={18}/>{toast}</div>}
   </div>
 }

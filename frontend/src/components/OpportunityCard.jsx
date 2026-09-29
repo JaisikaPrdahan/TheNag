@@ -2,9 +2,11 @@ import { Bookmark, BriefcaseBusiness, CalendarDays, Check, ChevronRight, CircleH
 
 const confidenceTone = (score) => score >= 80 ? 'high' : score >= 55 ? 'medium' : 'low'
 
+export const needsDateConfirm = item => item.status === 'accepted' && !item.calendar_event_id && item.deadline && item.deadline !== 'Not provided' && item.deadline_confidence !== 'green'
+
 export const Confirmation = ({ items }) => items?.length ? <div className="confirmation">{items.map((c, i) => <div key={i}><Check size={14}/> {c.label}{c.url && <> · <a href={c.url} target="_blank" rel="noreferrer">Open</a></>}</div>)}</div> : null
 
-export default function OpportunityCard({ item, onWhy, onAction, onDraft }) {
+export default function OpportunityCard({ item, onWhy, onAction, onDraft, onConfirmDate }) {
   const confidence = Math.round((item.extraction_confidence * .7) + (item.source_trust * .3))
   return (
     <article className={`opportunity-card ${item.rank >= 85 ? 'top-match' : ''}`}>
@@ -48,6 +50,7 @@ export default function OpportunityCard({ item, onWhy, onAction, onDraft }) {
             <button className="review-button" onClick={() => onAction(item, 'accepted')}>Accept <ChevronRight size={16}/></button></>}
       </div>
       <Confirmation items={item.confirmation}/>
+      {needsDateConfirm(item) && <button className="review-button" onClick={() => onConfirmDate(item)}>Confirm date &amp; add to calendar</button>}
     </article>
   )
 }

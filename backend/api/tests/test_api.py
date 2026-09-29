@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import sys
 
@@ -258,11 +259,11 @@ def test_accept_retains_a_source_trust_fact_with_redacted_reason(monkeypatch):
 
 
 def test_reflect_uses_hindsight_when_it_returns_a_result(monkeypatch):
-    fake = _FakeMemoryProvider(reflect_result={"period": "From Hindsight", "stats": {}, "insights": ["remote"], "skills": [], "nudge": ""})
+    fake = _FakeMemoryProvider(reflect_result={"text": "From Hindsight"})
     monkeypatch.setattr(app_module, "memory_provider", fake)
     response = client.get("/api/reflect")
     assert response.status_code == 200
-    assert response.json()["period"] == "From Hindsight"
+    assert response.json()["insights"][0] == "From Hindsight"
 
 
 def test_reflect_falls_back_to_local_math_when_hindsight_has_nothing(monkeypatch):
@@ -376,3 +377,72 @@ def test_store_survives_reload_and_accept_still_works(monkeypatch, tmp_path):
     restored = next(o for o in state["opportunities"] if o["id"] == item["id"])
     assert restored["status"] == "accepted" and restored["notion_page_id"]
     assert any(a["opportunity_id"] == item["id"] for a in state["actions"])
+
+
+def _capture_hindsight(monkeypatch, responses):
+    from memory import providers as mp
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append((req.get_method(), req.full_url, json.loads(req.data or b"{}"), dict(req.header_items())))
+        status, body = responses.pop(0)
+        if status != 200:
+            raise mp.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(b'{"detail":"missing"}'))
+        return io.BytesIO(json.dumps(body).encode())
+
+    monkeypatch.setattr(mp.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def test_hindsight_retain_recall_use_official_paths_and_shapes(monkeypatch):
+    from memory import HindsightCloudProvider
+    monkeypatch.setenv("HINDSIGHT_API_URL", "https://hs.example/")
+    monkeypatch.setenv("HINDSIGHT_API_KEY", "k")
+    calls = _capture_hindsight(monkeypatch, [
+        (404, {}), (200, {}), (200, {"success": True}),  # retain: bank missing -> create -> retry
+        (200, {"results": [{"id": "1", "text": "likes remote", "context": 'thenag-meta:{"kind": "preference"}'}]}),
+    ])
+    provider = HindsightCloudProvider()
+    provider.remember("u1", "likes remote", {"kind": "preference"})
+    method, url, body, headers = calls[0]
+    assert (method, url) == ("POST", "https://hs.example/v1/default/banks/thenag-user-u1/memories")
+    assert body["items"][0]["content"] == "likes remote" and body["items"][0]["context"].startswith("thenag-meta:")
+    assert headers["Authorization"] == "Bearer k" and headers["User-agent"] == "TheNag/1.0"
+    assert calls[1][:2] == ("PUT", "https://hs.example/v1/default/banks/thenag-user-u1")
+    memories = provider.recall("u1", "remote")
+    assert calls[3][1].endswith("/banks/thenag-user-u1/memories/recall") and calls[3][2]["query"] == "remote"
+    assert memories[0]["metadata"] == {"kind": "preference"} and memories[0]["text"] == "likes remote"
+
+
+def test_hindsight_recall_404_means_no_memories(monkeypatch):
+    from memory import HindsightSourceTrustProvider
+    monkeypatch.setenv("HINDSIGHT_API_URL", "https://hs.example")
+    monkeypatch.setenv("HINDSIGHT_API_KEY", "k")
+    _capture_hindsight(monkeypatch, [(404, {})])
+    assert HindsightSourceTrustProvider().recall("@x") == []
+
+
+def test_link_source_creator_comes_from_reel_metadata(monkeypatch):
+    extraction = {**_fake_extraction(), "source_creator": "dmart_careers"}
+    monkeypatch.setattr(app_module, "run_extraction", lambda url: extraction)
+    monkeypatch.setattr(app_module, "classify_extraction", lambda e: _classification("Jobs & Gigs", "green"))
+    body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/M/"}).json()
+    assert body["source_creator"] == "@dmart_careers"
+
+
+def test_title_at_company_does_not_repeat_company():
+    from actions import title_at_company
+    assert title_at_company("Multiple Positions at DMart Hosakote", "DMart") == "Multiple Positions at DMart Hosakote"
+    assert title_at_company("Analyst", "Acme") == "Analyst at Acme"
+    assert title_at_company("", "Acme") == "Acme"
+
+
+def test_confirm_date_creates_calendar_event_for_yellow_deadline(monkeypatch):
+    yellow = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "yellow", "raw_text": "next Friday", "source": "caption"}]
+    item = _ingest_link(monkeypatch, "Analyst hiring at Yellowco Ltd, apply by next Friday", "Jobs & Gigs", "green", yellow)
+    accepted = client.post(f"/api/opportunities/{item['id']}/action", json={"action": "accepted"}).json()
+    assert accepted["action_result"]["kind"] == "note_only"
+    body = client.post(f"/api/opportunities/{item['id']}/confirm-date").json()
+    assert body["deadline_confidence"] == "green" and body["action_result"]["calendar_event_id"]
+    assert any("calendar" in c["label"].lower() for c in body["confirmation"])
+    assert client.post("/api/opportunities/nope/confirm-date").status_code == 404
