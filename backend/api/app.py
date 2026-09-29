@@ -27,6 +27,53 @@ from memory import DemoMemoryProvider, build_memory_provider  # noqa: E402
 from pipeline import duplicate_status, heuristic_extract, rank_and_explain, weekly_reflect  # noqa: E402
 from pipeline.providers import GroqOpportunityExtractor  # noqa: E402
 
+sys.path.insert(0, str(BACKEND_DIR / "classification"))
+from classifier import classify_extraction  # noqa: E402
+
+
+class LinkFetchFailed(Exception):
+    """A reel/post URL couldn't be auto-fetched; caller should fall back to caption/upload."""
+
+
+_extraction_combine_cache: dict = {}
+
+
+def _load_extraction_combine():
+    """Lazily imports backend/extraction's combine module.
+
+    Deferred (rather than a top-level import) so the API can start and be
+    tested without extraction's heavy dependencies (Tesseract, FFmpeg,
+    PyTorch/Whisper, yt-dlp, instaloader) installed.
+
+    backend/extraction/ocr/pipeline.py bare-imports itself as "pipeline" --
+    the same bare name this API's own backend/pipeline package already
+    holds in sys.modules. Stash/restore around the import so extraction's
+    "pipeline" resolves to ocr/pipeline.py without clobbering backend.pipeline
+    for the rest of the app.
+    """
+    if "run_extraction" not in _extraction_combine_cache:
+        sys.path.insert(0, str(BACKEND_DIR / "extraction"))
+        saved_pipeline = sys.modules.pop("pipeline", None)
+        try:
+            import combine as _combine
+        finally:
+            if saved_pipeline is not None:
+                sys.modules["pipeline"] = saved_pipeline
+            else:
+                sys.modules.pop("pipeline", None)
+        _extraction_combine_cache["run_extraction"] = _combine.run_extraction
+        _extraction_combine_cache["AutoFetchFailed"] = _combine.AutoFetchFailed
+    return _extraction_combine_cache["run_extraction"], _extraction_combine_cache["AutoFetchFailed"]
+
+
+def run_extraction(media_path_or_url: str) -> dict:
+    """Thin, monkeypatchable wrapper around backend/extraction's combine.run_extraction."""
+    real_run_extraction, real_auto_fetch_failed = _load_extraction_combine()
+    try:
+        return real_run_extraction(media_path_or_url)
+    except real_auto_fetch_failed as exc:
+        raise LinkFetchFailed(str(exc)) from exc
+
 
 SEED_PATH = BACKEND_DIR / "demo" / "seed.json"
 seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
@@ -56,29 +103,24 @@ class ActionInput(BaseModel):
     reason: str | None = None
 
 
+class LinkInput(BaseModel):
+    url: str
+    source_creator: str | None = None
+
+
 def _user(user_id: str | None) -> str:
     return user_id or "demo-user"
 
 
-def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
-    if not caption.strip():
-        raise HTTPException(422, "Caption text is required")
-    extracted = heuristic_extract(caption)
-    if os.getenv("GROQ_API_KEY"):
-        try:
-            extracted.update({k: v for k, v in GroqOpportunityExtractor().extract(caption).items() if v})
-        except Exception:
-            extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
-    if source_creator:
-        extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     source = source_by_name.get(extracted["source_creator"], {
         "name": extracted["source_creator"], "trust_score": 60, "observation_count": 0,
         "assessment": "Not enough history", "evidence": "New source; no shared reliability history yet.",
     })
     try:
-        memories = memory_provider.recall(user_id, caption)
+        memories = memory_provider.recall(user_id, memory_query)
     except Exception:
-        memories = DemoMemoryProvider().recall(user_id, caption)
+        memories = DemoMemoryProvider().recall(user_id, memory_query)
         extracted["memory_warning"] = "Hindsight Cloud was unavailable; demo memory was used."
     duplicate = duplicate_status(extracted, opportunities)
     rank, why, next_action = rank_and_explain(extracted, memories, source, duplicate)
@@ -93,6 +135,58 @@ def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
     opportunities.insert(0, result)
     memory_provider.remember(user_id, f"Viewed {result['title']} at {result['company']}", {"kind": "viewed", "opportunity_id": result["id"]})
     return result
+
+
+def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
+    if not caption.strip():
+        raise HTTPException(422, "Caption text is required")
+    extracted = heuristic_extract(caption)
+    if os.getenv("GROQ_API_KEY"):
+        try:
+            extracted.update({k: v for k, v in GroqOpportunityExtractor().extract(caption).items() if v})
+        except Exception:
+            extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
+    if source_creator:
+        extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+    return _finalize(extracted, caption, user_id)
+
+
+def _combined_text(extraction: dict) -> str:
+    parts = [extraction.get("caption_text") or ""]
+    parts.extend(result.get("text", "") for result in extraction.get("ocr_results") or [])
+    transcript = extraction.get("transcript") or {}
+    parts.append(transcript.get("text", "") if isinstance(transcript, dict) else str(transcript))
+    if extraction.get("hashtags"):
+        parts.append(" ".join(extraction["hashtags"]))
+    return " ".join(part for part in parts if part).strip()
+
+
+def _primary_resolved_date(resolved_dates: list[dict]) -> dict | None:
+    deadline_types = {"application_deadline", "registration_deadline"}
+    for date in resolved_dates:
+        if date.get("date_type") in deadline_types:
+            return date
+    return resolved_dates[0] if resolved_dates else None
+
+
+def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
+    if not url.strip():
+        raise HTTPException(422, "Link is required")
+    extraction = run_extraction(url)
+    classified = classify_extraction(extraction)
+    combined_text = _combined_text(extraction)
+    extracted = heuristic_extract(combined_text)
+    extracted["category"] = classified.primary_category
+    extracted["category_confidence"] = classified.overall_confidence
+    extracted["resolved_dates"] = classified.resolved_dates
+    primary_date = _primary_resolved_date(classified.resolved_dates)
+    if primary_date:
+        extracted["deadline"] = primary_date.get("date") or f"{primary_date['start_date']} to {primary_date['end_date']}"
+        extracted["deadline_confidence"] = primary_date["confidence"]
+    extracted["source_url"] = url
+    if source_creator:
+        extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+    return _finalize(extracted, combined_text, user_id)
 
 
 @app.get("/api/health")
@@ -142,6 +236,14 @@ async def process_upload(
     result = _process(transcript, source_creator, _user(x_user_id))
     result.update({"uploaded_filename": file.filename, "transcription_mode": transcription_mode})
     return result
+
+
+@app.post("/api/process-link")
+def process_link(payload: LinkInput, x_user_id: str | None = Header(default=None)):
+    try:
+        return _process_link(payload.url, payload.source_creator, _user(x_user_id))
+    except LinkFetchFailed as exc:
+        raise HTTPException(422, {"error_type": "AutoFetchFailed", "message": str(exc)})
 
 
 @app.post("/api/opportunities/{opportunity_id}/action")

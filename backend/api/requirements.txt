@@ -3,3 +3,14 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pytest==8.3.4
 httpx==0.28.1
+
+# /api/process-link calls backend/extraction/combine.py::run_extraction() in-process
+# (lazily imported on first real request -- see app.py::_load_extraction_combine).
+# Needs Tesseract and FFmpeg on PATH too; see backend/extraction/README.md.
+pytesseract==0.3.13
+opencv-python==4.10.0.84
+Pillow==10.4.0
+yt-dlp>=2024.10.0
+instaloader>=4.13
+requests>=2.31.0
+openai-whisper>=20250625
