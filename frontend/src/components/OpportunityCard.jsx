@@ -1,0 +1,47 @@
+import { Bookmark, BriefcaseBusiness, CalendarDays, ChevronRight, CircleHelp, MapPin, Sparkles, Wifi } from 'lucide-react'
+
+const confidenceTone = (score) => score >= 80 ? 'high' : score >= 55 ? 'medium' : 'low'
+
+export default function OpportunityCard({ item, onWhy, onAction }) {
+  const confidence = Math.round((item.extraction_confidence * .7) + (item.source_trust * .3))
+  return (
+    <article className={`opportunity-card ${item.rank >= 85 ? 'top-match' : ''}`}>
+      <div className="card-topline">
+        <div className="rank-pill"><Sparkles size={13} /> {item.rank}% match</div>
+        <div className={`confidence ${confidenceTone(confidence)}`}><span /> {confidence}% confidence</div>
+      </div>
+      <div className="card-heading">
+        <div className="company-mark">{item.company?.slice(0, 1) || 'T'}</div>
+        <div><h3>{item.title}</h3><p>{item.company}</p></div>
+      </div>
+      <div className="meta-row">
+        <span><MapPin size={14}/>{item.location}</span>
+        <span><Wifi size={14}/>{item.work_mode}</span>
+        <span><BriefcaseBusiness size={14}/>{item.employment_type}</span>
+      </div>
+      <div className="skills">{item.skills?.slice(0, 4).map(skill => <span key={skill}>{skill}</span>)}</div>
+      {item.duplicate?.status !== 'new' && <button className={`change-notice ${item.duplicate.status}`} onClick={() => onWhy(item)}>
+        <span className="pulse-dot"/><strong>{item.duplicate.label}</strong>
+        {item.duplicate.changes?.[0] && <span>{item.duplicate.changes[0].before} → {item.duplicate.changes[0].after}</span>}
+        <ChevronRight size={15}/>
+      </button>}
+      <div className="fact-grid">
+        <div><span>Experience</span><strong>{item.experience}</strong></div>
+        <div><span>Compensation</span><strong>{item.compensation}</strong></div>
+        <div><span><CalendarDays size={12}/> Deadline</span><strong>{item.deadline}</strong></div>
+      </div>
+      <div className="source-line">
+        <span>via {item.source_creator}</span><span className="dot">•</span>
+        <span className={confidenceTone(item.source_trust)}>{item.source_trust}% source trust</span>
+        <span className="observations">{item.source_detail?.observation_count || (item.source_creator === '@careergrid' ? 14 : 8)} observations</span>
+      </div>
+      <div className="card-actions">
+        <button className="why-button" onClick={() => onWhy(item)}><CircleHelp size={16}/> Why this?</button>
+        <button className={`save-button ${item.status === 'saved' ? 'saved' : ''}`} onClick={() => onAction(item, item.status === 'saved' ? 'skipped' : 'saved')}>
+          <Bookmark size={16} fill={item.status === 'saved' ? 'currentColor' : 'none'}/>{item.status === 'saved' ? 'Saved' : 'Save'}
+        </button>
+        <button className="review-button" onClick={() => onAction(item, 'accepted')}>Review draft <ChevronRight size={16}/></button>
+      </div>
+    </article>
+  )
+}

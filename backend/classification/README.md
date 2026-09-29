@@ -15,7 +15,7 @@ this implements.
    Bengali, Tamil, Telugu -- see that file's docstring for a caveat on
    translation accuracy) and picks a primary category (one of Job,
    Internship, Scholarship, College/Admission, Interview, Exam,
-   Hackathon/Competition, or Uncertain), plus an optional secondary
+   Jobs & Gigs, Interviews & Hiring Drives, or Uncertain), plus an optional secondary
    category.
 2. **Score confidence** (`confidence.py`) -- tags the category and
    each fact green/yellow/red per `docs/spec.md` Section 4. A

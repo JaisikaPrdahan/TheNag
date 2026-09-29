@@ -26,19 +26,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from db.client import get_connection  # noqa: E402
 
-# classifier.py's category labels ("Job", "Hackathon/Competition", ...)
+# classifier.py's display labels ("Jobs & Gigs", "Interviews & Hiring Drives", ...)
 # vs. the opportunities.primary_category check constraint
 # (docs/database-schema.md Table 3), which uses lowercase/underscored
 # values. Keep this mapping here rather than changing either side's
 # own natural naming.
 CATEGORY_TO_DB_VALUE = {
-    "Job": "job",
-    "Internship": "internship",
-    "Scholarship": "scholarship",
-    "College/Admission": "college_admission",
-    "Interview": "interview",
-    "Exam": "exam",
-    "Hackathon/Competition": "hackathon_competition",
+    "Jobs & Gigs": "jobs_gigs",
+    "Interviews & Hiring Drives": "interviews_hiring_drives",
     "Uncertain": "uncertain",
 }
 

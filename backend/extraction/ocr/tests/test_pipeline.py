@@ -16,8 +16,8 @@ class TestDeduplication(unittest.TestCase):
 
     def test_exact_duplicates_collapse_to_one(self):
         results = [
-            {"text": "SMART INDIA HACKATHON", "timestamp": 1.0, "raw_confidence": 94.0, "confidence_level": "green"},
-            {"text": "SMART INDIA HACKATHON", "timestamp": 2.0, "raw_confidence": 94.0, "confidence_level": "green"},
+            {"text": "SOFTWARE HIRING DRIVE", "timestamp": 1.0, "raw_confidence": 94.0, "confidence_level": "green"},
+            {"text": "SOFTWARE HIRING DRIVE", "timestamp": 2.0, "raw_confidence": 94.0, "confidence_level": "green"},
         ]
         deduped = deduplicate_ocr_results(results)
         self.assertEqual(len(deduped), 1)
@@ -37,7 +37,7 @@ class TestDeduplication(unittest.TestCase):
 
     def test_genuinely_different_text_does_not_collapse(self):
         results = [
-            {"text": "SMART INDIA HACKATHON", "timestamp": 1.0, "raw_confidence": 94.0, "confidence_level": "green"},
+            {"text": "SOFTWARE HIRING DRIVE", "timestamp": 1.0, "raw_confidence": 94.0, "confidence_level": "green"},
             {"text": "Sirf Ppts nahi", "timestamp": 11.0, "raw_confidence": 92.7, "confidence_level": "green"},
         ]
         deduped = deduplicate_ocr_results(results)
@@ -57,7 +57,7 @@ class TestDeduplication(unittest.TestCase):
         self.assertGreater(high, 0.6)
 
         # Genuinely different sentences — should be low similarity
-        low = _text_similarity("SMART INDIA HACKATHON", "Sirf Ppts nahi")
+        low = _text_similarity("SOFTWARE HIRING DRIVE", "Sirf Ppts nahi")
         self.assertLess(low, 0.5)
 
 

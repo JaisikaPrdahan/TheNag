@@ -1,7 +1,6 @@
 """
-Category keywords for classify_extraction(), across the Phase 1
-languages locked in docs/spec.md Section 2: Hindi, English, Bengali,
-Tamil, Telugu.
+Category keywords for the memory-first demo. English, Hindi, and
+Hindi-English code-switching are the supported languages.
 
 Each category maps to a list of (keyword, language) tuples. Keywords
 include:
@@ -32,66 +31,30 @@ independent weight when it can't, and it's confusing to read.
 # and single words unambiguous where possible.
 
 CATEGORIES = {
-    "Job": [
+    "Jobs & Gigs": [
         # English
         "job", "jobs", "hiring", "vacancy", "recruitment", "career",
-        "full-time", "fresher hiring", "walk-in interview",
+        "full-time", "fresher hiring", "freelance", "gig", "contract",
         # Hindi (Devanagari + romanized)
         "नौकरी", "भर्ती", "रोजगार", "naukri", "bharti", "rozgar",
         # Bengali
         "চাকরি", "নিয়োগ", "chakri", "niyog",
         # Tamil
         "வேலை", "பணி", "velai", "pani",
-        # Telugu
-        "ఉద్యోగం", "నియామకం", "udyogam", "niyamakam",
-    ],
-    "Internship": [
+        # Internships remain valid when they are work opportunities.
+        # Internships remain valid when they are work opportunities.
         "internship", "intern", "interns",
         "इंटर्नशिप", "internship karo",
-        "ইন্টার্নশিপ",
-        "பயிற்சி பணி", "இன்டர்ன்ஷிப்",
-        "ఇంటర్న్‌షిప్",
     ],
-    "Scholarship": [
-        "scholarship", "fellowship", "financial aid", "stipend",
-        "छात्रवृत्ति", "chatravritti", "scholarship yojana",
-        "বৃত্তি", "britti",
-        "உதவித்தொகை", "uthavithodhagai",
-        "స్కాలర్‌షిప్", "ఉపకార వేతనం", "upakara vetanam",
-    ],
-    "College/Admission": [
-        "admission", "admissions", "college", "university", "entrance",
-        "प्रवेश", "दाखिला", "pravesh", "dakhila",
-        "ভর্তি", "bhorti",
-        "சேர்க்கை", "serkkai",
-        "ప్రవేశం", "praveesham",
-    ],
-    "Interview": [
+    "Interviews & Hiring Drives": [
         "interview", "selection round", "personal interview", "pi round",
+        "walk-in interview", "walk in", "hiring drive", "recruitment drive",
         "साक्षात्कार", "इंटरव्यू", "sakshatkar",
-        "সাক্ষাৎকার", "ইন্টারভিউ", "sakkhatkar",
-        "நேர்காணல்", "nerkaanal",
-        "ఇంటర్వ్యూ",
+        "मेगा ड्राइव", "भर्ती अभियान",
     ],
-    "Exam": [
-        "exam", "examination", "test", "admit card", "registration",
-        "entrance exam", "board exam", "govt exam", "government exam",
-        "परीक्षा", "pariksha", "प्रवेश परीक्षा",
-        "পরীক্ষা", "porikkha",
-        "தேர்வு", "thervu",
-        "పరీక్ష",
-    ],
-    "Hackathon/Competition": [
-        "hackathon", "competition", "challenge", "coding challenge",
-        "innovation challenge", "smart india hackathon", "sih",
-        "ethindia", "case competition", "quiz competition",
-        "प्रतियोगिता", "हैकाथॉन", "pratiyogita",
-        "প্রতিযোগিতা",
-        "போட்டி", "potti", "ஹேக்கத்தான்",
-        "పోటీ", "poti", "హ్యాకథాన్",
-    ],
+    "Uncertain": [],
 }
 
 # Which language(s) a keyword hints at, used only for evidence/debugging
 # (not required for scoring). Kept intentionally simple.
-PHASE_1_LANGUAGES = ["hindi", "english", "bengali", "tamil", "telugu"]
+PHASE_1_LANGUAGES = ["hindi", "english"]

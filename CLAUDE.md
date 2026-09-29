@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-TheNag turns a shared Instagram Reel about an educational/early-career opportunity (Job, Internship, Scholarship, College/Admission, Interview, Exam, Hackathon/Competition, or Uncertain) into a verified deadline, document checklist, and a single calendar event. Every extracted fact carries a green/yellow/red confidence tag — nothing is silently guessed. Product spec: `docs/spec.md`; ownership and interfaces: `docs/team-structure.md`; locked technical decisions with rationale: `docs/engineering-decisions.md`.
+TheNag is a memory-driven opportunity assistant for job seekers. It turns caption or video input into a structured opportunity, remembers preferences privately, detects listing changes, and prepares draft-only actions. Product overview: `README.md`; ownership and interfaces: `docs/team-structure.md`; data boundary: `docs/database-schema.md`.
 
 ## Pipeline architecture
 
@@ -22,7 +22,7 @@ The backend is a staged pipeline. Each stage is owned by a different team member
 - **Relative dates must resolve against the reel's `post_date`**, not the current time. `classify_extraction()` already does this (`reference_date = parse_post_date(extraction.get("post_date"))`); any other caller of `resolve_dates()` must pass `reference_date` the same way, or it silently falls back to "now" (this was a real bug — regression test in `classification/tests/test_post_date_regression.py`). `parse_post_date()` itself falls back to "now" only when `post_date` is missing or unparseable (local-file input). Relative dates stay tagged yellow even after resolution.
 - `ocr_results` never contains red-confidence entries (dropped in the OCR pipeline). Transcripts have no confidence score and may be empty (music) or contain hallucinations — don't treat them as green.
 - Whisper model size is locked to `"medium"`; Tesseract (not Cloud Vision) is locked. Check `docs/engineering-decisions.md` before changing any "locked" decision.
-- Classifier category labels (`"Hackathon/Competition"`) differ from DB values (`hackathon_competition`); the mapping is `CATEGORY_TO_DB_VALUE` in `classification/db_writes.py`. A new category must be added there and to the check constraint in `backend/db/migrations/003_opportunities.sql`.
+- Classifier display labels differ from DB values; the mapping is `CATEGORY_TO_DB_VALUE` in `classification/db_writes.py`. A new category must be added there and to the check constraint in `backend/db/migrations/003_opportunities.sql`.
 
 ### Database
 

@@ -3,8 +3,7 @@ create table if not exists opportunities (
   reel_id uuid not null references reels(id) on delete cascade,
   user_id uuid,
   primary_category text not null check (primary_category in (
-    'job', 'internship', 'scholarship', 'college_admission',
-    'interview', 'exam', 'hackathon_competition', 'uncertain'
+    'jobs_gigs', 'interviews_hiring_drives', 'uncertain'
   )),
   secondary_categories jsonb default '[]', -- array of category strings
   extracted_facts jsonb not null default '[]', -- array of {value, confidence, type, source}
