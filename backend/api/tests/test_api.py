@@ -36,6 +36,39 @@ def _ingest_link(monkeypatch, caption, category, confidence, resolved_dates, sou
     return response.json()
 
 
+class _FakeMemoryProvider:
+    def __init__(self, recall_result=None, reflect_result=None, raise_on_recall=False):
+        self.recall_result = recall_result or []
+        self.reflect_result = reflect_result
+        self.raise_on_recall = raise_on_recall
+        self.remembered = []
+
+    def recall(self, user_id, query):
+        if self.raise_on_recall:
+            raise RuntimeError("Hindsight Cloud unreachable")
+        return self.recall_result
+
+    def remember(self, user_id, text, metadata):
+        self.remembered.append((user_id, text, metadata))
+        return {"redactions": []}
+
+    def reflect(self, user_id):
+        return self.reflect_result
+
+
+class _FakeSourceTrustProvider:
+    def __init__(self, recall_result=None):
+        self.recall_result = recall_result or []
+        self.remembered = []
+
+    def recall(self, source_creator):
+        return self.recall_result
+
+    def remember(self, source_creator, text, metadata):
+        self.remembered.append((source_creator, text, metadata))
+        return {}
+
+
 def test_bootstrap_has_meaningful_seed_data():
     response = client.get("/api/bootstrap")
     assert response.status_code == 200
@@ -172,3 +205,69 @@ def test_action_updates_private_memory_with_redaction():
     assert response.status_code == 200
     redactions = response.json()["memory_redactions"]
     assert {item["type"] for item in redactions} == {"email", "phone"}
+
+
+def test_duplicate_detected_via_recall_when_not_in_live_opportunities(monkeypatch):
+    fake = _FakeMemoryProvider(recall_result=[{
+        "text": "Viewed a role", "metadata": {
+            "kind": "viewed", "opportunity_id": "ghost-opp", "title": "New opportunity", "company": "Recallco Labs",
+        },
+    }])
+    monkeypatch.setattr(app_module, "memory_provider", fake)
+    response = client.post("/api/process-caption", json={"caption": "Frontend Developer hiring at Recallco Labs, remote role"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["duplicate"]["status"] == "resurfaced"
+    assert body["duplicate"]["previous_id"] == "ghost-opp"
+    assert any(call[2].get("title") == body["title"] and call[2].get("company") == body["company"] for call in fake.remembered)
+
+
+def test_source_trust_negative_facts_reduce_rank_and_show_in_why(monkeypatch):
+    fake_trust = _FakeSourceTrustProvider(recall_result=[
+        {"metadata": {"kind": "dead_link"}}, {"metadata": {"kind": "rejected_as_fake"}},
+    ])
+    monkeypatch.setattr(app_module, "source_trust_provider", fake_trust)
+    response = client.post("/api/process-caption", json={
+        "caption": "Backend Engineer hiring at Trustcheck Inc, remote role", "source_creator": "shadyacct",
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert any("dead or fake" in reason for reason in body["why"])
+
+
+def test_accept_retains_a_source_trust_fact_with_redacted_reason(monkeypatch):
+    fake_trust = _FakeSourceTrustProvider()
+    monkeypatch.setattr(app_module, "source_trust_provider", fake_trust)
+    response = client.post("/api/opportunities/opp-01/action", json={
+        "action": "rejected", "reason": "this link is dead, email me at person@example.com",
+    })
+    assert response.status_code == 200
+    assert fake_trust.remembered
+    source_creator, text, metadata = fake_trust.remembered[-1]
+    assert metadata["kind"] == "dead_link"
+    assert "person@example.com" not in text
+
+
+def test_reflect_uses_hindsight_when_it_returns_a_result(monkeypatch):
+    fake = _FakeMemoryProvider(reflect_result={"period": "From Hindsight", "stats": {}, "insights": ["remote"], "skills": [], "nudge": ""})
+    monkeypatch.setattr(app_module, "memory_provider", fake)
+    response = client.get("/api/reflect")
+    assert response.status_code == 200
+    assert response.json()["period"] == "From Hindsight"
+
+
+def test_reflect_falls_back_to_local_math_when_hindsight_has_nothing(monkeypatch):
+    fake = _FakeMemoryProvider(reflect_result=None)
+    monkeypatch.setattr(app_module, "memory_provider", fake)
+    response = client.get("/api/reflect")
+    assert response.status_code == 200
+    assert response.json()["period"] == "Last 7 days"
+
+
+def test_hindsight_failure_falls_back_and_logs_a_warning_not_silently(monkeypatch, caplog):
+    fake = _FakeMemoryProvider(raise_on_recall=True)
+    monkeypatch.setattr(app_module, "memory_provider", fake)
+    with caplog.at_level("WARNING", logger="thenag.api"):
+        response = client.post("/api/process-caption", json={"caption": "QA Engineer hiring at Warnco, remote role"})
+    assert response.status_code == 200
+    assert any("falling back" in record.message for record in caplog.records)
