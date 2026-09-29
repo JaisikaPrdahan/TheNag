@@ -95,6 +95,18 @@ def test_link_ingest_auto_fetch_failure_returns_typed_error(monkeypatch):
     assert response.json()["detail"]["error_type"] == "AutoFetchFailed"
 
 
+def test_caption_explicit_date_gets_real_classifier_confidence():
+    response = client.post("/api/process-caption", json={
+        "caption": "Frontend Developer hiring at Realdate Labs, remote role, apply by 12 October",
+        "source_creator": "careergrid",
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deadline"] == "2026-10-12"
+    assert body["deadline_confidence"] == "green"
+    assert body["resolved_dates"]
+
+
 def test_accept_green_date_creates_calendar_event_and_confirmed_note(monkeypatch):
     body = _ingest_link(monkeypatch, "Frontend Developer hiring at Greenleaf Technologies, remote role, apply by 12 October",
                          "Jobs & Gigs", "green",

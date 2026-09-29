@@ -32,7 +32,7 @@ Shared Postgres (`backend/db/`): `client.py::get_connection()` (psycopg2, `RealD
 
 This applies to stages 1–2 (`extraction/`, `classification/`): no packages or `__init__.py` files there. Modules import siblings by bare name and cross-folder access is done via `sys.path.insert` (e.g. `combine.py` adds `ocr/` and `audio/`; `db_writes.py` adds `backend/` to reach `db.client`; tests add their parent folder). Follow the same pattern and run scripts/tests from inside the relevant subsystem folder. `backend/api/`, `backend/pipeline/`, `backend/memory/`, and `backend/actions/` are proper packages with `__init__.py` instead.
 
-**Gotcha:** `backend/extraction/ocr/pipeline.py` bare-imports itself as `pipeline`, the same bare name `backend/pipeline` (the API's own package) holds in `sys.modules`. Anything that imports `combine.py` into the same process as `backend/pipeline` must stash/restore `sys.modules["pipeline"]` around that import (see `app.py::_load_extraction_combine()`) or one of the two silently shadows the other.
+`backend/extraction/ocr`'s OCR pipeline module is named `ocr_pipeline.py` (not `pipeline.py`) specifically to avoid colliding with `backend/pipeline`'s own bare name when both get imported into the same process (`app.py` does, for `/api/process-link`).
 
 ## Environment setup
 

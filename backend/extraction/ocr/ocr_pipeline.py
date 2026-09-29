@@ -154,12 +154,12 @@ if __name__ == "__main__":
     # Quick manual test — pass a local video/image file OR a public
     # Instagram post URL (reel or photo) and it'll download it first,
     # automatically detecting whether it's a video or a photo.
-    # Usage: python pipeline.py <path_or_url> [--preprocess]
+    # Usage: python ocr_pipeline.py <path_or_url> [--preprocess]
     import sys
     from url_downloader import is_url, download_media_from_url, AutoFetchFailed
 
     if len(sys.argv) < 2:
-        print("Usage: python pipeline.py <path_to_video_or_image OR instagram_url> [--preprocess]")
+        print("Usage: python ocr_pipeline.py <path_to_video_or_image OR instagram_url> [--preprocess]")
         sys.exit(1)
 
     input_arg = sys.argv[1]

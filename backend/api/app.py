@@ -45,23 +45,10 @@ def _load_extraction_combine():
     Deferred (rather than a top-level import) so the API can start and be
     tested without extraction's heavy dependencies (Tesseract, FFmpeg,
     PyTorch/Whisper, yt-dlp, instaloader) installed.
-
-    backend/extraction/ocr/pipeline.py bare-imports itself as "pipeline" --
-    the same bare name this API's own backend/pipeline package already
-    holds in sys.modules. Stash/restore around the import so extraction's
-    "pipeline" resolves to ocr/pipeline.py without clobbering backend.pipeline
-    for the rest of the app.
     """
     if "run_extraction" not in _extraction_combine_cache:
         sys.path.insert(0, str(BACKEND_DIR / "extraction"))
-        saved_pipeline = sys.modules.pop("pipeline", None)
-        try:
-            import combine as _combine
-        finally:
-            if saved_pipeline is not None:
-                sys.modules["pipeline"] = saved_pipeline
-            else:
-                sys.modules.pop("pipeline", None)
+        import combine as _combine
         _extraction_combine_cache["run_extraction"] = _combine.run_extraction
         _extraction_combine_cache["AutoFetchFailed"] = _combine.AutoFetchFailed
     return _extraction_combine_cache["run_extraction"], _extraction_combine_cache["AutoFetchFailed"]
@@ -140,6 +127,25 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     return result
 
 
+def _primary_resolved_date(resolved_dates: list[dict]) -> dict | None:
+    deadline_types = {"application_deadline", "registration_deadline"}
+    for date in resolved_dates:
+        if date.get("date_type") in deadline_types:
+            return date
+    return resolved_dates[0] if resolved_dates else None
+
+
+def _apply_classified_dates(extracted: dict, classified) -> None:
+    """Overlays the classifier's resolved dates (real green/yellow confidence,
+    not the un-confidence-tagged deadline heuristic_extract guesses at) onto
+    an already heuristic_extract()-ed opportunity dict."""
+    extracted["resolved_dates"] = classified.resolved_dates
+    primary_date = _primary_resolved_date(classified.resolved_dates)
+    if primary_date:
+        extracted["deadline"] = primary_date.get("date") or f"{primary_date['start_date']} to {primary_date['end_date']}"
+        extracted["deadline_confidence"] = primary_date["confidence"]
+
+
 def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
     if not caption.strip():
         raise HTTPException(422, "Caption text is required")
@@ -151,6 +157,8 @@ def _process(caption: str, source_creator: str | None, user_id: str) -> dict:
             extracted["provider_warning"] = "Groq was unavailable; deterministic extraction was used."
     if source_creator:
         extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"
+    classified = classify_extraction({"caption_text": caption, "hashtags": [], "post_date": None, "ocr_results": [], "transcript": None})
+    _apply_classified_dates(extracted, classified)
     return _finalize(extracted, caption, user_id)
 
 
@@ -164,14 +172,6 @@ def _combined_text(extraction: dict) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
-def _primary_resolved_date(resolved_dates: list[dict]) -> dict | None:
-    deadline_types = {"application_deadline", "registration_deadline"}
-    for date in resolved_dates:
-        if date.get("date_type") in deadline_types:
-            return date
-    return resolved_dates[0] if resolved_dates else None
-
-
 def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     if not url.strip():
         raise HTTPException(422, "Link is required")
@@ -181,11 +181,7 @@ def _process_link(url: str, source_creator: str | None, user_id: str) -> dict:
     extracted = heuristic_extract(combined_text)
     extracted["category"] = classified.primary_category
     extracted["category_confidence"] = classified.overall_confidence
-    extracted["resolved_dates"] = classified.resolved_dates
-    primary_date = _primary_resolved_date(classified.resolved_dates)
-    if primary_date:
-        extracted["deadline"] = primary_date.get("date") or f"{primary_date['start_date']} to {primary_date['end_date']}"
-        extracted["deadline_confidence"] = primary_date["confidence"]
+    _apply_classified_dates(extracted, classified)
     extracted["source_url"] = url
     if source_creator:
         extracted["source_creator"] = source_creator if source_creator.startswith("@") else f"@{source_creator}"

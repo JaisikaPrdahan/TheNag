@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ocr"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "audio"))
 
 from url_downloader import is_url, download_media_from_url, AutoFetchFailed  # noqa: E402
-from pipeline import run_ocr_pipeline  # noqa: E402
+from ocr_pipeline import run_ocr_pipeline  # noqa: E402
 from transcription import transcribe_audio  # noqa: E402
 
 
