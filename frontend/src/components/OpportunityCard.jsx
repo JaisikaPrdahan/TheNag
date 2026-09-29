@@ -44,6 +44,7 @@ export default function OpportunityCard({ item, onWhy, onAction, onDraft, onConf
         <button className={`save-button ${item.status === 'saved' ? 'saved' : ''}`} onClick={() => onAction(item, item.status === 'saved' ? 'skipped' : 'saved')}>
           <Bookmark size={16} fill={item.status === 'saved' ? 'currentColor' : 'none'}/>{item.status === 'saved' ? 'Saved' : 'Save'}
         </button>
+        {item.status !== 'accepted' && item.status !== 'rejected' && <button className="save-button" onClick={() => onAction(item, 'rejected', window.prompt('Why not? (optional — e.g. fake, dead link, not relevant)') || undefined)}>Reject</button>}
         {item.status === 'accepted'
           ? <button className="review-button" onClick={() => onDraft(item)}>Accepted <Check size={16}/></button>
           : <><button className="save-button" onClick={() => onDraft(item)}>Review draft</button>

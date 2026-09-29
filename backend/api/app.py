@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -182,6 +183,70 @@ def _recall_duplicate_hint(user_id: str, title: str, company: str) -> dict | Non
     return None
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _source_stats() -> dict[str, dict]:
+    """Per-creator verdict counts from the persisted store: the latest accept/reject
+    per opportunity. The single source of every observation count in the app."""
+    by_id = {o["id"]: o for o in opportunities}
+    latest = {}
+    for event in seed["actions"]:
+        if event.get("action") in ("accepted", "rejected") and event.get("opportunity_id") in by_id:
+            latest[event["opportunity_id"]] = event
+    stats: dict[str, dict] = {}
+    for opportunity_id, event in latest.items():
+        creator = by_id[opportunity_id].get("source_creator")
+        if not creator:
+            continue
+        counts = stats.setdefault(creator, {"confirmed": 0, "misleading": 0, "changed": 0})
+        kind = _source_trust_kind(event["action"], event.get("reason"))
+        counts["confirmed" if kind == "confirmed" else "misleading" if kind in {"dead_link", "rejected_as_fake"} else "changed"] += 1
+    return stats
+
+
+def _source_for(creator: str | None) -> dict:
+    """Trust record for a creator: seed record in demo mode, otherwise derived from real verdicts.
+    `changed` counts rejections for reasons other than fake/dead."""
+    if creator in source_by_name:
+        return source_by_name[creator]
+    counts = _source_stats().get(creator, {"confirmed": 0, "misleading": 0, "changed": 0})
+    confirmed, misleading, other = counts["confirmed"], counts["misleading"], counts["changed"]
+    observations = confirmed + misleading + other
+    trust = round(100 * (confirmed + 3) / (confirmed + misleading + 5))
+    facts = [text for count, text in ((confirmed, f"accepted {confirmed}"), (misleading, f"rejected {misleading} as fake or dead"),
+                                      (other, f"rejected {other} for other reasons")) if count]
+    return {
+        "id": (creator or "unknown").lstrip("@"), "name": creator, "trust_score": trust, "observation_count": observations,
+        "confirmed": confirmed, "misleading": misleading, "changed": other,
+        "assessment": "Not enough history" if not observations else ("High confidence" if trust >= 80 else "Medium confidence" if trust >= 55 else "Low confidence"),
+        "evidence": ", ".join(facts) or "New source; no shared reliability history yet.",
+    }
+
+
+def _live(item: dict) -> dict:
+    source = _source_for(item.get("source_creator"))
+    return {**item, "source_trust": source["trust_score"], "source_detail": source}
+
+
+def _sources_view() -> list[dict]:
+    creators = list(dict.fromkeys(o["source_creator"] for o in opportunities if o.get("source_creator") and o["source_creator"] != "Unknown source"))
+    records = [_source_for(creator) for creator in creators]
+    records += [s for s in sources if s["name"] not in creators]  # demo seed sources
+    return sorted(records, key=lambda record: record["observation_count"], reverse=True)
+
+
+def _saved_view() -> dict:
+    def newest(item):
+        return item.get("last_action_at") or item.get("created_at") or ""
+    live = [_live(o) for o in opportunities]
+    return {
+        "accepted": sorted((o for o in live if o.get("status") == "accepted"), key=newest, reverse=True),
+        "saved": sorted((o for o in live if o.get("status") == "saved"), key=newest, reverse=True),
+    }
+
+
 def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
     """Recalls shared, aggregate source-trust facts (never a user's private
     bank -- see backend/memory/README.md) and folds them into rank + the Why
@@ -197,17 +262,12 @@ def _apply_source_trust(extracted: dict, rank: int, why: list[str]) -> int:
     if negative:
         rank = max(8, rank - 6 * negative)
         why.append(f"Shared source-trust memory has {negative} report(s) of dead or fake listings from {source_creator}.")
-    elif facts:
-        why.append(f"Shared source-trust memory has {len(facts)} prior observation(s) of {source_creator}, none negative.")
     return rank
 
 
 def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
     extracted["source_creator"] = _real_creator(extracted.get("source_creator")) or "Unknown source"
-    source = source_by_name.get(extracted["source_creator"], {
-        "name": extracted["source_creator"], "trust_score": 60, "observation_count": 0,
-        "assessment": "Not enough history", "evidence": "New source; no shared reliability history yet.",
-    })
+    source = _source_for(extracted["source_creator"])
     try:
         memories = memory_provider.recall(user_id, memory_query)
     except Exception:
@@ -226,7 +286,7 @@ def _finalize(extracted: dict, memory_query: str, user_id: str) -> dict:
         "id": opportunity_id, **extracted,
         "source_trust": source["trust_score"], "source_detail": source,
         "duplicate": duplicate, "rank": rank, "why": why,
-        "recommended_action": next_action, "status": "new",
+        "recommended_action": next_action, "status": "new", "created_at": _now(),
         # True only when recalled preference/decision memory fed the result; otherwise the Why panel says "Confidence".
         "personalized": any((m.get("metadata") or {}).get("kind") in {"preference", "decision"} for m in memories),
         "draft_only": True, "memory_mode": memory_mode, "inference_mode": inference_mode,
@@ -378,14 +438,25 @@ def bootstrap(x_user_id: str | None = Header(default=None)):
         "user": seed["demo_user"],
         "memories": seed.get("memories", []),
         "demo_seed": demo_seed_enabled(),
-        "opportunities": sorted(opportunities, key=lambda item: item.get("rank", 0), reverse=True),
-        "sources": sources,
+        "opportunities": sorted((_live(o) for o in opportunities), key=lambda item: item.get("rank", 0), reverse=True),
+        "sources": _sources_view(),
+        "saved": _saved_view(),
         "reflect": _reflect(user_id),
         "modes": {
             "memory": memory_mode, "source_trust": source_trust_mode, "inference": inference_mode,
             "transcription": "whisper" if os.getenv("ENABLE_LOCAL_WHISPER") == "true" else "demo",
         },
     }
+
+
+@app.get("/api/saved")
+def saved_view():
+    return _saved_view()
+
+
+@app.get("/api/sources")
+def sources_view():
+    return _sources_view()
 
 
 @app.post("/api/process-caption")
@@ -451,7 +522,11 @@ def record_action(opportunity_id: str, payload: ActionInput, x_user_id: str | No
     if payload.action == "accepted":
         action_result = accept_opportunity(opportunity, opportunities, calendar_provider, notes_provider)
     user_id = _user(x_user_id)
-    event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason}
+    now = _now()
+    opportunity["last_action_at"] = now
+    if action_result:
+        opportunity["confirmation"] = _confirmation(action_result)
+    event = {"opportunity_id": opportunity_id, "user_id": user_id, "action": payload.action, "reason": payload.reason, "at": now}
     seed["actions"].append(event)
     decision_text = f"{payload.action.title()} {title_at_company(opportunity['title'], opportunity['company'])}. Reason: {payload.reason or 'not provided'}"
     decision_metadata = {"kind": "decision", "action": payload.action, **_opportunity_memory_metadata(opportunity_id, opportunity)}
@@ -482,8 +557,10 @@ def confirm_opportunity_date(opportunity_id: str):
         action_result = confirm_date(opportunity, calendar_provider)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    opportunity["confirmation"] = _confirmation(action_result)
+    opportunity["last_action_at"] = _now()
     _save_store()
-    return {"ok": True, "action_result": action_result, "confirmation": _confirmation(action_result), "deadline_confidence": "green"}
+    return {"ok": True, "action_result": action_result, "confirmation": opportunity["confirmation"], "deadline_confidence": "green"}
 
 
 @app.get("/api/reflect")

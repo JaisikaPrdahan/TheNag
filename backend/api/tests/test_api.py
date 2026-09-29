@@ -480,3 +480,53 @@ def test_placeholder_creator_is_treated_as_missing(monkeypatch):
     extraction["source_creator"] = None
     body = client.post("/api/process-link", json={"url": "https://www.instagram.com/reel/P/"}).json()
     assert body["source_creator"] == "Unknown source"
+
+
+def _fresh_store(monkeypatch, tmp_path):
+    empty = app_module.load_state(False)
+    monkeypatch.setenv("THENAG_STORE_PATH", str(tmp_path / "store.json"))
+    monkeypatch.setattr(app_module, "seed", empty)
+    monkeypatch.setattr(app_module, "opportunities", empty["opportunities"])
+    monkeypatch.setattr(app_module, "sources", [])
+    monkeypatch.setattr(app_module, "source_by_name", {})
+    monkeypatch.setattr(app_module, "memory_provider", _FakeMemoryProvider())
+    monkeypatch.setattr(app_module, "source_trust_provider", _FakeSourceTrustProvider())
+
+
+def test_tab_endpoints_are_empty_without_data(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    assert client.get("/api/saved").json() == {"accepted": [], "saved": []}
+    assert client.get("/api/sources").json() == []
+    reflect = client.get("/api/reflect").json()
+    assert reflect["empty"] is True and reflect["insights"] == []
+
+
+def test_tabs_reflect_real_actions_and_observation_counts_agree(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    resolved = [{"date": "2026-11-20", "date_type": "application_deadline", "confidence": "green", "raw_text": "20 Nov", "source": "caption"}]
+    a = _ingest_link(monkeypatch, "Analyst hiring at Alphaco Ltd, apply by 20 November", "Jobs & Gigs", "green", resolved, source_creator="goodsrc")
+    b = _ingest_link(monkeypatch, "Designer hiring at Betaco Ltd", "Jobs & Gigs", "green", [], source_creator="goodsrc")
+    c = _ingest_link(monkeypatch, "Writer hiring at Gammaco Ltd", "Jobs & Gigs", "green", [], source_creator="goodsrc")
+    post = lambda item, action, reason=None: client.post(f"/api/opportunities/{item['id']}/action", json={"action": action, "reason": reason})
+    post(a, "accepted"); post(b, "saved"); post(c, "rejected", "this looks fake")
+
+    saved = client.get("/api/saved").json()
+    assert [o["id"] for o in saved["accepted"]] == [a["id"]] and [o["id"] for o in saved["saved"]] == [b["id"]]
+    assert any("calendar" in x["label"].lower() for x in saved["accepted"][0]["confirmation"])
+
+    sources = client.get("/api/sources").json()
+    assert len(sources) == 1 and sources[0]["name"] == "@goodsrc"
+    assert sources[0]["observation_count"] == 2 and sources[0]["confirmed"] == 1 and sources[0]["misleading"] == 1
+    assert "accepted 1" in sources[0]["evidence"] and "rejected 1 as fake" in sources[0]["evidence"]
+
+    feed = client.get("/api/bootstrap").json()
+    assert {o["source_detail"]["observation_count"] for o in feed["opportunities"]} == {2}
+    assert {o["source_trust"] for o in feed["opportunities"]} == {sources[0]["trust_score"]}
+    assert feed["saved"] == saved and sources[0]["trust_score"] == round(100 * 4 / 7)
+
+    reflect = client.get("/api/reflect").json()
+    assert reflect["empty"] is False and reflect["stats"]["accepted"] == 1 and reflect["stats"]["processed"] == 3
+    assert any("this looks fake" in line for line in reflect["insights"])
+
+    post(b, "skipped")  # un-save removes it from Saved
+    assert client.get("/api/saved").json()["saved"] == []

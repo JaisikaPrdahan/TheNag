@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 
@@ -153,19 +153,47 @@ def rank_and_explain(opportunity: dict, memories: list[dict], source: dict, dupl
     return score, reasons, action
 
 
-def weekly_reflect(actions: list[dict], opportunities: list[dict]) -> dict:
-    saved = [a for a in actions if a.get("action") == "saved"]
-    accepted = [a for a in actions if a.get("action") == "accepted"]
-    skipped = [a for a in actions if a.get("action") in ("skipped", "rejected")]
+def _within_days(timestamp: str | None, days: int, now: datetime) -> bool:
+    """Untimestamped records (seed data only) are treated as recent."""
+    if not timestamp:
+        return True
+    try:
+        moment = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).days < days
+
+
+def weekly_reflect(actions: list[dict], opportunities: list[dict], now: datetime | None = None) -> dict:
+    """Patterns from the user's real actions in the last 7 days. `empty` is true
+    below 3 recorded events so the UI shows an empty state, not made-up insight."""
+    now = now or datetime.now(timezone.utc)
+    recent = [a for a in actions if _within_days(a.get("at"), 7, now)]
+    processed = [o for o in opportunities if _within_days(o.get("created_at"), 7, now)]
+    saved = [a for a in recent if a.get("action") == "saved"]
+    accepted = [a for a in recent if a.get("action") == "accepted"]
+    rejected = [a for a in recent if a.get("action") in ("skipped", "rejected")]
     by_id = {o["id"]: o for o in opportunities}
     top_skills: dict[str, int] = {}
     for action in saved + accepted:
         for skill in by_id.get(action.get("opportunity_id"), {}).get("skills", []):
             top_skills[skill] = top_skills.get(skill, 0) + 1
+    insights = []
+    total = len(processed) + len(recent)
+    if total:
+        insights.append(f"You processed {len(processed)} opportunities, saved {len(saved)}, accepted {len(accepted)} and passed on {len(rejected)}.")
+    for action in rejected:
+        if action.get("reason"):
+            opportunity = by_id.get(action.get("opportunity_id"), {})
+            insights.append(f"Passed on {opportunity.get('title') or opportunity.get('company') or 'a listing'}: " + chr(0x201c) + action["reason"] + chr(0x201d))
     return {
         "period": "Last 7 days",
-        "stats": {"saved": len(saved), "accepted": len(accepted), "skipped": len(skipped), "follow_through": f"{round(len(accepted) / max(len(saved), 1) * 100)}%"},
-        "insights": [f"You saved {len(saved)} opportunities and moved forward with {len(accepted)}."] if actions else [],
+        "empty": total < 3,
+        "stats": {"processed": len(processed), "saved": len(saved), "accepted": len(accepted), "rejected": len(rejected),
+                  "follow_through": f"{round(len(accepted) / max(len(saved) + len(accepted), 1) * 100)}%"},
+        "insights": insights[:6],
         "skills": [name for name, _ in sorted(top_skills.items(), key=lambda item: item[1], reverse=True)[:5]],
         "nudge": "Shortlist two saved roles for focused applications before adding more." if saved else "",
     }
